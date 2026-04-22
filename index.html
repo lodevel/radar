@@ -1,0 +1,1129 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Cercles Wallonie — Rues & Lieux</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root { --sidebar-w: 400px; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; font-family: -apple-system, Segoe UI, Roboto, sans-serif; font-size: 14px; }
+  body { display: flex; }
+  #sidebar { width: var(--sidebar-w); height: 100vh; overflow-y: auto; background: #f5f5f5; border-right: 1px solid #ddd; padding: 12px; }
+  #map { flex: 1; height: 100vh; }
+  h2 { margin: 0 0 8px; font-size: 14px; text-transform: uppercase; letter-spacing: .5px; color: #475569; }
+  .section { background: white; padding: 10px; border-radius: 6px; margin-bottom: 10px; box-shadow: 0 1px 2px rgba(0,0,0,.05); }
+  input[type=text], input[type=number], select { width: 100%; padding: 6px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; }
+  button { padding: 6px 10px; border: 1px solid #bbb; background: white; border-radius: 4px; cursor: pointer; font-size: 13px; }
+  button:hover { background: #eee; }
+  button.primary { background: #2563eb; color: white; border-color: #2563eb; }
+  button.primary:hover { background: #1d4ed8; }
+  button.primary:disabled { background: #94a3b8; border-color: #94a3b8; cursor: wait; }
+  .row { display: flex; gap: 6px; align-items: center; }
+  .row > * { flex: 1; }
+  .circle-item { display: flex; align-items: center; gap: 6px; padding: 4px 0; border-bottom: 1px solid #eee; }
+  .circle-item:last-child { border-bottom: none; }
+  .color-dot { width: 12px; height: 12px; border-radius: 50%; border: 3px solid; flex-shrink: 0; }
+  .circle-item .addr { flex: 1; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .circle-item .radius-edit { display: flex; gap: 2px; align-items: center; white-space: nowrap; }
+  .circle-item .radius-edit input { width: 55px; padding: 2px 4px; font-size: 11px; text-align: right; }
+  .circle-item .radius-edit select { max-width: 44px; padding: 2px; font-size: 11px; }
+  .circle-item .rm { padding: 2px 8px; font-size: 14px; line-height: 1; }
+  .filters label { display: inline-flex; align-items: center; gap: 4px; margin-right: 10px; font-size: 13px; cursor: pointer; }
+  .results-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+  .results-count { color: #666; font-size: 12px; font-weight: normal; text-transform: none; letter-spacing: 0; }
+  .commune-group { margin-bottom: 4px; }
+  .commune-title { font-weight: 600; padding: 4px 6px; background: #e5e7eb; border-radius: 3px; cursor: pointer; user-select: none; font-size: 13px; }
+  .commune-title::before { content: '▾'; margin-right: 4px; display: inline-block; width: 10px; color: #64748b; }
+  .commune-group.collapsed .commune-title::before { content: '▸'; }
+  .commune-group.collapsed ul { display: none; }
+  .result-list { list-style: none; padding: 0; margin: 2px 0 0; }
+  .result-list li { padding: 3px 6px; cursor: pointer; border-radius: 3px; display: flex; justify-content: space-between; gap: 6px; align-items: center; }
+  .result-list li:hover { background: #e0f2fe; }
+  .result-list li.selected { background: #bae6fd; }
+  .result-list li .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .result-list li .type-tag { font-size: 10px; padding: 1px 6px; border-radius: 8px; background: #f1f5f9; color: #475569; flex-shrink: 0; text-transform: uppercase; letter-spacing: .3px; }
+  .type-tag.rue { background: #dbeafe; color: #1e40af; }
+  .type-tag.place { background: #fef3c7; color: #92400e; }
+  .type-tag.impasse { background: #fee2e2; color: #991b1b; }
+  .type-tag.chemin { background: #d1fae5; color: #065f46; }
+  .type-tag.remarquable { background: #ede9fe; color: #5b21b6; }
+  .error { color: #b91c1c; background: #fee2e2; padding: 6px; border-radius: 4px; font-size: 12px; }
+  .progress { font-size: 12px; color: #666; font-style: italic; margin-top: 6px; min-height: 14px; }
+  .search-results { position: absolute; background: white; border: 1px solid #ccc; border-radius: 4px; max-height: 220px; overflow-y: auto; z-index: 1000; left: 0; right: 0; top: 100%; box-shadow: 0 4px 10px rgba(0,0,0,.1); }
+  .search-results div { padding: 6px 8px; cursor: pointer; border-bottom: 1px solid #eee; font-size: 12px; }
+  .search-results div:hover { background: #f0f9ff; }
+  .empty { color: #888; font-size: 12px; font-style: italic; padding: 4px 0; }
+  .help { font-size: 11px; color: #64748b; margin-top: 6px; }
+</style>
+</head>
+<body>
+<aside id="sidebar">
+  <div class="section">
+    <h2>Nouveau cercle</h2>
+    <div style="position:relative">
+      <input type="text" id="addrInput" placeholder="Adresse (ex: Grand Place, Namur)" autocomplete="off">
+      <div id="addrResults" class="search-results" style="display:none"></div>
+    </div>
+    <div class="row" style="margin-top:6px">
+      <input type="number" id="radiusInput" value="500" min="10" step="10" placeholder="Rayon">
+      <select id="radiusUnit" style="max-width:70px"><option value="m">m</option><option value="km">km</option></select>
+    </div>
+    <div class="help">Tape une adresse puis choisis une suggestion pour créer un cercle.</div>
+  </div>
+
+  <div class="section">
+    <h2>Cercles actifs</h2>
+    <div id="circlesList"><div class="empty">Aucun cercle.</div></div>
+    <div class="row" style="margin-top:10px;align-items:center">
+      <label style="font-size:12px;color:#475569;flex:0 0 auto">Mode</label>
+      <select id="modeSelect" style="flex:1">
+        <option value="or" selected>Union (∪) — dans ≥ 1 cercle</option>
+        <option value="and">Intersection (∩) — dans tous</option>
+        <option value="xor">Exclusif (⊕) — dans un seul</option>
+      </select>
+    </div>
+    <div class="row" style="margin-top:6px">
+      <button class="primary" id="searchBtn" disabled style="flex:2">Rechercher</button>
+      <button id="clearAllBtn" style="flex:1">Tout effacer</button>
+    </div>
+    <div id="searchStatus" class="progress"></div>
+  </div>
+
+  <div class="section filters">
+    <h2>Types</h2>
+    <label><input type="checkbox" value="rue" checked>Rues</label>
+    <label><input type="checkbox" value="place" checked>Places</label>
+    <label><input type="checkbox" value="impasse" checked>Impasses</label>
+    <label><input type="checkbox" value="chemin" checked>Chemins</label>
+    <label><input type="checkbox" value="remarquable" checked>Lieux remarq.</label>
+  </div>
+
+  <div class="section">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+      <h2 style="margin:0">Communes</h2>
+      <div style="display:flex;gap:4px">
+        <button id="communesAll" style="font-size:11px;padding:2px 6px">Tout</button>
+        <button id="communesNone" style="font-size:11px;padding:2px 6px">Aucun</button>
+      </div>
+    </div>
+    <div id="communesFilter" style="max-height:160px;overflow-y:auto;font-size:12px">
+      <div class="empty">Lance une recherche pour voir les communes.</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="results-header">
+      <h2 style="margin:0">Résultats <span class="results-count" id="resultsCount"></span></h2>
+    </div>
+    <input type="text" id="filterInput" placeholder="Filtrer par nom…" style="margin-bottom:6px">
+    <div id="resultsList"><div class="empty">Aucun résultat. Ajoute un cercle puis clique « Rechercher ».</div></div>
+  </div>
+
+  <div class="section">
+    <div class="row">
+      <button id="exportCsv">Export CSV</button>
+      <button id="exportGeoJson">Export GeoJSON</button>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Cache</h2>
+    <div id="cacheInfo" style="font-size:12px;color:#475569;margin-bottom:6px">—</div>
+    <button id="clearCacheBtn" style="width:100%">Vider le cache</button>
+  </div>
+
+  <div class="section">
+    <h2>Diagnostic</h2>
+    <button id="diagBtn" style="width:100%">Tester la connectivité Overpass</button>
+    <pre id="diagOut" style="white-space:pre-wrap;font-size:11px;max-height:240px;overflow:auto;background:#0f172a;color:#e2e8f0;padding:8px;border-radius:4px;margin-top:8px;display:none"></pre>
+  </div>
+</aside>
+
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+"use strict";
+
+/* ============================================================
+   INIT MAP
+   ============================================================ */
+const map = L.map('map').setView([50.4674, 4.8718], 9); // Wallonie (Namur)
+// CartoDB Voyager — serveur de tuiles public plus permissif que tile.openstreetmap.org
+// (OSM officiel bloque parfois les origines file:// ou trafic intense).
+const primary = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+  attribution: '© OpenStreetMap · © CARTO',
+  subdomains: 'abcd',
+  maxZoom: 20
+});
+primary.addTo(map);
+// Fallback auto sur OSM si CartoDB échoue aussi
+primary.on('tileerror', (e) => {
+  console.warn('[Tiles] erreur CartoDB, bascule OSM fallback', e);
+  if (!map._fallbackTiles) {
+    map._fallbackTiles = L.tileLayer('https://tile.openstreetmap.de/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap Deutschland', maxZoom: 18
+    }).addTo(map);
+    map.removeLayer(primary);
+  }
+});
+
+/* ============================================================
+   STATE
+   ============================================================ */
+const COLORS = ['#dc2626','#2563eb','#16a34a','#9333ea','#ea580c','#0891b2','#db2777','#65a30d'];
+let circles = [];            // {id, lat, lng, radius, address, color, layer, marker}
+let results = [];            // {id, name, type, commune, elements, layers}
+let selectedResultId = null;
+let hoveredResultId = null;
+
+const STORAGE_KEY = 'cercles-wallonie-v1';
+
+function safeParse(s, d) { try { return JSON.parse(s) ?? d; } catch(e) { return d; } }
+
+/* ------------------------------------------------------------
+   IndexedDB — cache des résultats Overpass par cercle
+   ------------------------------------------------------------ */
+const DB_NAME = 'cercles-wallonie';
+const DB_VERSION = 1;
+const STORE_CIRCLES = 'circleCache';    // clé = hash(lat,lng,radius) → { elements: [...], ts }
+const STORE_ADMIN   = 'adminCache';      // clé = "admin_<bboxHash>" → { geometries: [...], ts }
+
+let dbPromise = null;
+function openDB() {
+  if (dbPromise) return dbPromise;
+  dbPromise = new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(STORE_CIRCLES)) db.createObjectStore(STORE_CIRCLES);
+      if (!db.objectStoreNames.contains(STORE_ADMIN))   db.createObjectStore(STORE_ADMIN);
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  return dbPromise;
+}
+async function idbGet(store, key) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(store, 'readonly');
+    const r = tx.objectStore(store).get(key);
+    r.onsuccess = () => resolve(r.result);
+    r.onerror = () => reject(r.error);
+  });
+}
+async function idbPut(store, key, value) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(store, 'readwrite');
+    tx.objectStore(store).put(value, key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+async function idbClear(store) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(store, 'readwrite');
+    tx.objectStore(store).clear();
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+async function idbCount(store) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(store, 'readonly');
+    const r = tx.objectStore(store).count();
+    r.onsuccess = () => resolve(r.result);
+    r.onerror = () => reject(r.error);
+  });
+}
+function circleCacheKey(c) {
+  // Arrondi pour qu'un cercle légèrement reposé au même endroit réutilise le cache.
+  const lat = c.lat.toFixed(5), lng = c.lng.toFixed(5), r = Math.round(c.radius);
+  return `c:${lat}:${lng}:${r}`;
+}
+function saveCircles() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(
+    circles.map(c => ({id:c.id, lat:c.lat, lng:c.lng, radius:c.radius, address:c.address, color:c.color}))
+  ));
+}
+function loadCircles() {
+  const raw = safeParse(localStorage.getItem(STORAGE_KEY), []);
+  raw.forEach(c => addCircle(c.lat, c.lng, c.radius, c.address, c.color, c.id));
+}
+
+/* ============================================================
+   CIRCLES
+   ============================================================ */
+function addCircle(lat, lng, radius, address, color, id) {
+  const c = {
+    id: id || (Date.now() + '_' + Math.random().toString(36).slice(2,6)),
+    lat, lng, radius, address,
+    color: color || COLORS[circles.length % COLORS.length]
+  };
+  c.layer = L.circle([lat, lng], {
+    radius, color: c.color, weight: 2, fill: false
+  }).addTo(map);
+  c.marker = L.marker([lat, lng], {
+    icon: L.divIcon({
+      className: '',
+      html: `<div style="width:14px;height:14px;border-radius:50%;background:${c.color};border:2px solid white;box-shadow:0 1px 3px rgba(0,0,0,.4)"></div>`,
+      iconSize: [14,14], iconAnchor: [7,7]
+    })
+  }).bindTooltip(`${address} — rayon ${fmtRadius(radius)}`).addTo(map);
+  circles.push(c);
+  renderCirclesList();
+  fitToCircles();
+  saveCircles();
+  updateSearchBtn();
+}
+function removeCircle(id) {
+  const c = circles.find(c => c.id === id);
+  if (!c) return;
+  map.removeLayer(c.layer);
+  map.removeLayer(c.marker);
+  circles = circles.filter(x => x.id !== id);
+  renderCirclesList();
+  saveCircles();
+  updateSearchBtn();
+}
+function fitToCircles() {
+  if (!circles.length) return;
+  const bounds = L.latLngBounds([]);
+  circles.forEach(c => bounds.extend(c.layer.getBounds()));
+  if (bounds.isValid()) map.fitBounds(bounds, { padding: [40,40] });
+}
+function fmtRadius(r) { return r >= 1000 ? (r/1000) + ' km' : r + ' m'; }
+function renderCirclesList() {
+  const el = document.getElementById('circlesList');
+  if (!circles.length) { el.innerHTML = '<div class="empty">Aucun cercle.</div>'; return; }
+  el.innerHTML = circles.map(c => {
+    const inKm = c.radius >= 1000;
+    const value = inKm ? (c.radius / 1000) : c.radius;
+    return `
+    <div class="circle-item">
+      <div class="color-dot" style="border-color:${c.color}"></div>
+      <div class="addr" title="${esc(c.address)}">${esc(c.address)}</div>
+      <div class="radius-edit">
+        <input type="number" min="${inKm ? '0.01' : '10'}" step="${inKm ? '0.1' : '10'}" value="${value}" data-id="${c.id}" class="r-val">
+        <select data-id="${c.id}" class="r-unit">
+          <option value="m" ${inKm ? '' : 'selected'}>m</option>
+          <option value="km" ${inKm ? 'selected' : ''}>km</option>
+        </select>
+      </div>
+      <button class="rm" data-id="${c.id}" title="Retirer">×</button>
+    </div>`;
+  }).join('');
+  el.querySelectorAll('button.rm').forEach(b => b.onclick = () => removeCircle(b.dataset.id));
+  el.querySelectorAll('.r-val').forEach(inp => {
+    inp.onchange = () => updateCircleRadius(inp.dataset.id, +inp.value, inp.parentElement.querySelector('.r-unit').value);
+  });
+  el.querySelectorAll('.r-unit').forEach(sel => {
+    sel.onchange = () => {
+      // When switching units, keep the *actual* radius; re-render to refresh bounds.
+      const c = circles.find(c => c.id === sel.dataset.id);
+      if (!c) return;
+      renderCirclesList();
+    };
+  });
+}
+function updateCircleRadius(id, val, unit) {
+  const c = circles.find(x => x.id === id);
+  if (!c || !val || val <= 0) return;
+  const radius = unit === 'km' ? val * 1000 : val;
+  if (radius < 10) { alert('Rayon minimum : 10 m'); renderCirclesList(); return; }
+  c.radius = radius;
+  c.layer.setRadius(radius);
+  c.marker.setTooltipContent(`${c.address} — rayon ${fmtRadius(radius)}`);
+  saveCircles();
+}
+function updateSearchBtn() {
+  document.getElementById('searchBtn').disabled = !circles.length;
+}
+
+/* ============================================================
+   ADMIN BOUNDARIES — résolution de commune hors-ligne
+   On télécharge une fois les frontières admin_level=8 (communes BE)
+   qui couvrent la bbox englobant tous les cercles, puis on fait
+   du point-in-polygon en JS. Plus d'appels Nominatim par élément.
+   ============================================================ */
+let adminBoundaries = []; // [{name, rings: [[lat,lng],...] array of rings (first = outer, rest = inner holes)}]
+
+function bboxOfCircles(circles) {
+  let minLat=90, maxLat=-90, minLng=180, maxLng=-180;
+  for (const c of circles) {
+    // approx. 1° lat ≈ 111 km, 1° lng ≈ 111 * cos(lat) km
+    const dLat = c.radius / 111000;
+    const dLng = c.radius / (111000 * Math.cos(c.lat * Math.PI / 180));
+    minLat = Math.min(minLat, c.lat - dLat);
+    maxLat = Math.max(maxLat, c.lat + dLat);
+    minLng = Math.min(minLng, c.lng - dLng);
+    maxLng = Math.max(maxLng, c.lng + dLng);
+  }
+  return { s: minLat, w: minLng, n: maxLat, e: maxLng };
+}
+function adminCacheKey(bbox) {
+  // round to ~1 km so a slightly different bbox still hits the cache
+  const r = v => v.toFixed(2);
+  return `admin:${r(bbox.s)}:${r(bbox.w)}:${r(bbox.n)}:${r(bbox.e)}`;
+}
+
+async function loadAdminBoundaries(bbox, overpassFetch) {
+  const key = adminCacheKey(bbox);
+  const cached = await idbGet(STORE_ADMIN, key);
+  if (cached) {
+    console.log(`Frontières admin : ${cached.boundaries.length} communes (cache)`);
+    return cached.boundaries;
+  }
+  // Overpass — relations admin_level=8 en Belgique dans la bbox (+petit buffer)
+  const pad = 0.02; // ~2 km
+  const bb = `${bbox.s - pad},${bbox.w - pad},${bbox.n + pad},${bbox.e + pad}`;
+  const q = `[out:json][timeout:60];
+relation["boundary"="administrative"]["admin_level"="8"](${bb});
+out body;
+>;
+out skel qt;`;
+  const data = await overpassFetch(q);
+  const relCount = (data.elements || []).filter(e => e.type === 'relation').length;
+  const wayCount = (data.elements || []).filter(e => e.type === 'way').length;
+  const nodeCount = (data.elements || []).filter(e => e.type === 'node').length;
+  console.log(`Overpass admin : ${relCount} relations, ${wayCount} ways, ${nodeCount} nodes`);
+  const boundaries = parseAdminRelations(data);
+  if (!boundaries.length) console.warn('Aucune frontière reconstruite — les communes seront toutes "Inconnu".');
+  await idbPut(STORE_ADMIN, key, { boundaries, ts: Date.now() });
+  console.log(`Frontières admin : ${boundaries.length} communes (téléchargées)`);
+  return boundaries;
+}
+
+function parseAdminRelations(data) {
+  // Reconstruit les polygones des relations : on assemble les ways ("outer"/"inner") en rings.
+  const nodes = new Map();
+  const ways = new Map();
+  for (const el of data.elements || []) {
+    if (el.type === 'node') nodes.set(el.id, [el.lat, el.lon]);
+    else if (el.type === 'way') ways.set(el.id, el.nodes);
+  }
+  const result = [];
+  for (const el of data.elements || []) {
+    if (el.type !== 'relation') continue;
+    const name = (el.tags && (el.tags['name:fr'] || el.tags.name)) || 'Inconnu';
+    const outers = [], inners = [];
+    for (const m of el.members || []) {
+      if (m.type !== 'way') continue;
+      const refs = ways.get(m.ref);
+      if (!refs) continue;
+      (m.role === 'inner' ? inners : outers).push(refs);
+    }
+    const outerRings = assembleRings(outers, nodes);
+    const innerRings = assembleRings(inners, nodes);
+    if (!outerRings.length) continue;
+    result.push({ name, outerRings, innerRings, bbox: ringsBBox(outerRings) });
+  }
+  return result;
+}
+function assembleRings(wayList, nodes) {
+  // naive ring assembly: chain ways sharing endpoints.
+  const rings = [];
+  const remaining = wayList.map(w => w.slice());
+  while (remaining.length) {
+    let current = remaining.shift().slice();
+    let extended = true;
+    while (extended && current[0] !== current[current.length - 1]) {
+      extended = false;
+      for (let i = 0; i < remaining.length; i++) {
+        const w = remaining[i];
+        if (w[0] === current[current.length - 1]) {
+          current = current.concat(w.slice(1));
+          remaining.splice(i, 1); extended = true; break;
+        }
+        if (w[w.length - 1] === current[current.length - 1]) {
+          current = current.concat(w.slice().reverse().slice(1));
+          remaining.splice(i, 1); extended = true; break;
+        }
+      }
+    }
+    const ring = current.map(id => nodes.get(id)).filter(Boolean);
+    if (ring.length >= 3) rings.push(ring);
+  }
+  return rings;
+}
+function ringsBBox(rings) {
+  let s=90,n=-90,w=180,e=-180;
+  for (const ring of rings) for (const [lat, lng] of ring) {
+    if (lat < s) s = lat; if (lat > n) n = lat;
+    if (lng < w) w = lng; if (lng > e) e = lng;
+  }
+  return { s, n, w, e };
+}
+function pointInRing(lat, lng, ring) {
+  // ray casting
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [yi, xi] = ring[i], [yj, xj] = ring[j];
+    const intersect = ((yi > lat) !== (yj > lat)) &&
+      (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+function communeForPoint(lat, lng) {
+  for (const b of adminBoundaries) {
+    const bb = b.bbox;
+    if (lat < bb.s || lat > bb.n || lng < bb.w || lng > bb.e) continue;
+    let inside = false;
+    for (const ring of b.outerRings) if (pointInRing(lat, lng, ring)) { inside = true; break; }
+    if (!inside) continue;
+    for (const ring of b.innerRings) if (pointInRing(lat, lng, ring)) { inside = false; break; }
+    if (inside) return b.name;
+  }
+  return 'Inconnu';
+}
+
+/* ============================================================
+   GEOCODE — Nominatim forward search
+   ============================================================ */
+const addrInput = document.getElementById('addrInput');
+const addrResults = document.getElementById('addrResults');
+let searchTimeout;
+const radiusInput = document.getElementById('radiusInput');
+const radiusUnit = document.getElementById('radiusUnit');
+function syncRadiusBounds() {
+  if (radiusUnit.value === 'km') {
+    radiusInput.min = '0.01'; radiusInput.step = '0.1';
+  } else {
+    radiusInput.min = '10'; radiusInput.step = '10';
+  }
+}
+radiusUnit.addEventListener('change', syncRadiusBounds);
+syncRadiusBounds();
+
+addrInput.addEventListener('input', () => {
+  clearTimeout(searchTimeout);
+  const q = addrInput.value.trim();
+  if (q.length < 3) { addrResults.style.display = 'none'; return; }
+  searchTimeout = setTimeout(() => doSearch(q), 400);
+});
+async function doSearch(q) {
+  const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&countrycodes=be&limit=6&addressdetails=1&accept-language=fr`;
+  try {
+    const r = await fetch(url);
+    const data = await r.json();
+    if (!data.length) { addrResults.innerHTML = '<div>Aucun résultat</div>'; addrResults.style.display = 'block'; return; }
+    addrResults.innerHTML = data.map((d, i) => `<div data-i="${i}">${esc(d.display_name)}</div>`).join('');
+    addrResults.style.display = 'block';
+    addrResults.querySelectorAll('div[data-i]').forEach(div => {
+      div.onclick = () => {
+        const d = data[+div.dataset.i];
+        const v = +document.getElementById('radiusInput').value;
+        const u = document.getElementById('radiusUnit').value;
+        const radius = u === 'km' ? v * 1000 : v;
+        if (!radius || radius < 10) { alert('Rayon invalide (minimum 10 m)'); return; }
+        const shortAddr = d.display_name.split(',').slice(0,2).join(',').trim();
+        addCircle(+d.lat, +d.lon, radius, shortAddr);
+        addrInput.value = '';
+        addrResults.style.display = 'none';
+      };
+    });
+  } catch(e) {
+    addrResults.innerHTML = '<div>Erreur de recherche</div>';
+    addrResults.style.display = 'block';
+  }
+}
+document.addEventListener('click', e => {
+  if (!addrInput.contains(e.target) && !addrResults.contains(e.target)) addrResults.style.display = 'none';
+});
+
+/* ============================================================
+   OVERPASS — build & run query
+   ============================================================ */
+const OVERPASS_ENDPOINTS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass.private.coffee/api/interpreter',
+  'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
+  'https://overpass.osm.jp/api/interpreter'
+];
+async function overpassFetch(query) {
+  let lastErr;
+  for (const ep of OVERPASS_ENDPOINTS) {
+    try {
+      const res = await fetch(ep, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'data=' + encodeURIComponent(query)
+      });
+      if (!res.ok) { lastErr = new Error('HTTP ' + res.status + ' sur ' + new URL(ep).host); continue; }
+      return await res.json();
+    } catch(e) { lastErr = e; }
+  }
+  throw lastErr || new Error('Tous les mirroirs Overpass sont inaccessibles');
+}
+function buildCircleQuery(c) {
+  const highwayRe = 'residential|primary|secondary|tertiary|unclassified|living_street|service|footway|path|track|pedestrian|road|cycleway|steps|trunk|primary_link|secondary_link|tertiary_link|trunk_link';
+  const tourismRe = 'attraction|artwork|viewpoint|museum';
+  const a = `around:${c.radius},${c.lat},${c.lng}`;
+  const parts = [
+    `way(${a})[highway~"^(${highwayRe})$"][name];`,
+    `way(${a})[place=square];`,
+    `way(${a})[leisure=plaza];`,
+    `node(${a})[place=square];`,
+    `node(${a})[historic];`,
+    `way(${a})[historic];`,
+    `node(${a})[tourism~"^(${tourismRe})$"];`,
+    `way(${a})[tourism~"^(${tourismRe})$"];`
+  ];
+  return `[out:json][timeout:180];\n(\n  ${parts.join('\n  ')}\n);\nout tags geom;`;
+}
+
+/* ============================================================
+   CLASSIFY — single type per element (priority order)
+   ============================================================ */
+function classify(el) {
+  const t = el.tags || {};
+  if (t.place === 'square' || t.leisure === 'plaza') return 'place';
+  if (t.highway === 'pedestrian' && t.area === 'yes') return 'place';
+  if (t.noexit === 'yes') return 'impasse';
+  if (t.highway) {
+    if (/^(residential|primary|secondary|tertiary|unclassified|living_street|road|trunk)(_link)?$/.test(t.highway)) return 'rue';
+    if (t.highway === 'pedestrian') return 'rue';
+    return 'chemin';
+  }
+  if (t.historic) return 'remarquable';
+  if (t.tourism && /^(attraction|artwork|viewpoint|museum)$/.test(t.tourism)) return 'remarquable';
+  return 'remarquable';
+}
+function displayName(el) {
+  const t = el.tags || {};
+  return t.name || t['name:fr'] || t['official_name'] || t.ref
+      || (t.historic && `(${t.historic.replace(/_/g,' ')})`)
+      || (t.tourism && `(${t.tourism.replace(/_/g,' ')})`)
+      || null;
+}
+function elementCentroid(el) {
+  if (el.type === 'node') return [el.lat, el.lon];
+  if (el.geometry && el.geometry.length) {
+    const mid = el.geometry[Math.floor(el.geometry.length/2)];
+    return [mid.lat, mid.lon];
+  }
+  return null;
+}
+
+/* ============================================================
+   SEARCH
+   ============================================================ */
+document.getElementById('searchBtn').onclick = runSearch;
+document.getElementById('clearAllBtn').onclick = () => {
+  if (!circles.length) return;
+  if (!confirm(`Supprimer les ${circles.length} cercle(s) ?`)) return;
+  [...circles].forEach(c => removeCircle(c.id));
+  clearResults();
+};
+
+async function runSearch() {
+  if (!circles.length) return;
+  const btn = document.getElementById('searchBtn');
+  const status = document.getElementById('searchStatus');
+  btn.disabled = true; btn.textContent = 'Chargement…';
+  clearResults();
+
+  console.group('[Cercles] Recherche');
+  console.log('Cercles actifs :', circles.map(c => ({lat: c.lat, lng: c.lng, radius: c.radius, address: c.address})));
+
+  // --- 1. Fetch Overpass data per circle, with IndexedDB cache ---
+  // Keep track of which circles each element belongs to for logical ops (AND/OR/XOR).
+  const elementCircles = new Map(); // key = osm_type/id → { el, circleIds: Set }
+  let cachedCount = 0, fetchedCount = 0;
+  try {
+    for (let i = 0; i < circles.length; i++) {
+      const c = circles[i];
+      const key = circleCacheKey(c);
+      let entry = await idbGet(STORE_CIRCLES, key);
+      if (entry) {
+        cachedCount++;
+        status.textContent = `Cercle ${i+1}/${circles.length} — cache (${entry.elements.length} éléments)`;
+      } else {
+        status.textContent = `Cercle ${i+1}/${circles.length} — requête Overpass…`;
+        const q = buildCircleQuery(c);
+        const data = await overpassFetch(q);
+        entry = { elements: data.elements || [], ts: Date.now() };
+        await idbPut(STORE_CIRCLES, key, entry);
+        fetchedCount++;
+      }
+      for (const el of entry.elements) {
+        const k = el.type + '/' + el.id;
+        let e = elementCircles.get(k);
+        if (!e) { e = { el, circleIds: new Set() }; elementCircles.set(k, e); }
+        e.circleIds.add(c.id);
+      }
+    }
+  } catch(e) {
+    status.innerHTML = `<span class="error">Erreur Overpass : ${esc(e.message || e)}</span>`;
+    btn.disabled = false; btn.textContent = 'Rechercher';
+    console.groupEnd();
+    refreshCacheInfo();
+    return;
+  }
+  const mode = document.getElementById('modeSelect').value; // 'or' | 'and' | 'xor'
+  const nCircles = circles.length;
+  console.log(`Cercles : ${cachedCount} depuis cache, ${fetchedCount} téléchargés → ${elementCircles.size} éléments uniques · mode=${mode}`);
+
+  // Apply logical operation across circles
+  const filtered = [];
+  for (const { el, circleIds } of elementCircles.values()) {
+    const n = circleIds.size;
+    let keep = false;
+    if (mode === 'or') keep = n >= 1;
+    else if (mode === 'and') keep = n === nCircles;
+    else if (mode === 'xor') keep = n === 1;
+    if (keep) filtered.push(el);
+  }
+  console.log(`Après opération logique (${mode}) : ${filtered.length} éléments`);
+
+  // --- 2. Load admin boundaries (with cache) ---
+  status.textContent = 'Chargement des frontières communales…';
+  try {
+    const bbox = bboxOfCircles(circles);
+    adminBoundaries = await loadAdminBoundaries(bbox, overpassFetch);
+  } catch(e) {
+    console.warn('Frontières admin non chargées :', e);
+    adminBoundaries = [];
+  }
+
+  // --- 3. Filter, classify, assign communes locally ---
+  status.textContent = 'Traitement local…';
+  const byType = {};
+  for (const el of filtered) {
+    const t = classify(el);
+    byType[t] = (byType[t] || 0) + 1;
+  }
+  console.log('Par type :', byType);
+
+  const raw = filtered.filter(el => !!displayName(el));
+  console.log(`Avec nom : ${raw.length}`);
+  console.groupEnd();
+
+  const enriched = [];
+  for (const el of raw) {
+    const t = el.tags || {};
+    const type = classify(el);
+    const name = displayName(el);
+    let communes;
+    if (t['addr:city']) {
+      communes = [t['addr:city']];
+    } else if (el.type === 'way' && el.geometry && el.geometry.length >= 2) {
+      const mid = el.geometry[Math.floor(el.geometry.length / 2)];
+      const start = el.geometry[0];
+      const end = el.geometry[el.geometry.length - 1];
+      const cs = communeForPoint(start.lat, start.lon);
+      const cm = communeForPoint(mid.lat, mid.lon);
+      const ce = communeForPoint(end.lat, end.lon);
+      const set = new Set([cs, cm, ce].filter(x => x && x !== 'Inconnu'));
+      communes = set.size ? [...set] : ['Inconnu'];
+    } else {
+      const c = elementCentroid(el);
+      communes = c ? [communeForPoint(c[0], c[1])] : ['Inconnu'];
+    }
+    for (const commune of communes) enriched.push({ el, name, type, commune });
+  }
+  status.textContent = `Déduplication…`;
+
+  /* Dedup by (nom, commune, type) — une rue = une ligne.
+     On garde toutes les géométries sous 'elements' pour dessiner/zoomer sur l'ensemble. */
+  const dedupMap = new Map();
+  for (const r of enriched) {
+    const key = `${(r.name||'').toLowerCase().trim()}__${r.commune.toLowerCase()}__${r.type}`;
+    if (!dedupMap.has(key)) dedupMap.set(key, { name: r.name, type: r.type, commune: r.commune, elements: [] });
+    dedupMap.get(key).elements.push(r.el);
+  }
+  results = Array.from(dedupMap.values()).map((r, i) => ({ ...r, id: 'r' + i }));
+
+  results.forEach(addResultToMap);
+  activeCommunes.clear(); // reset so rebuildCommunesFilter re-enables everything
+  rebuildCommunesFilter();
+  const summary = [`${results.length} entrées`];
+  if (cachedCount) summary.push(`${cachedCount} cercle(s) depuis cache`);
+  if (fetchedCount) summary.push(`${fetchedCount} cercle(s) téléchargé(s)`);
+  status.textContent = summary.join(' · ');
+  btn.disabled = false; btn.textContent = 'Rechercher';
+  renderResults();
+  refreshCacheInfo();
+}
+
+/* ============================================================
+   RESULTS ON MAP
+   ============================================================ */
+const DEFAULT_STYLE = { color: '#475569', weight: 3, opacity: 0.55, fillColor: '#475569', fillOpacity: 0.12 };
+const HOVER_STYLE   = { color: '#0284c7', weight: 4, opacity: 0.9,  fillColor: '#0284c7', fillOpacity: 0.18 };
+const SEL_STYLE     = { color: '#dc2626', weight: 5, opacity: 1,    fillColor: '#dc2626', fillOpacity: 0.3 };
+
+function addResultToMap(r) {
+  const layers = [];
+  for (const el of r.elements) {
+    let layer;
+    if (el.type === 'node') {
+      layer = L.circleMarker([el.lat, el.lon], { radius: 6, ...DEFAULT_STYLE });
+    } else if (el.geometry && el.geometry.length) {
+      const latlngs = el.geometry.map(p => [p.lat, p.lon]);
+      const closed = latlngs.length > 3
+        && latlngs[0][0] === latlngs[latlngs.length-1][0]
+        && latlngs[0][1] === latlngs[latlngs.length-1][1];
+      layer = closed ? L.polygon(latlngs, DEFAULT_STYLE) : L.polyline(latlngs, DEFAULT_STYLE);
+    }
+    if (!layer) continue;
+    layer.addTo(map);
+    layer.on('click', () => selectResult(r.id, false));
+    layer.on('mouseover', () => hoverResult(r.id));
+    layer.on('mouseout', () => hoverResult(null));
+    layer.bindTooltip(`${r.name} — ${r.type}${r.commune ? ' · ' + r.commune : ''}`);
+    layers.push(layer);
+  }
+  r.layers = layers;
+}
+function clearResults() {
+  for (const r of results) for (const l of r.layers || []) map.removeLayer(l);
+  results = [];
+  selectedResultId = null;
+  hoveredResultId = null;
+  rebuildCommunesFilter();
+  renderResults();
+}
+function styleResult(r, style) {
+  for (const l of r.layers || []) {
+    if (l instanceof L.CircleMarker && !(l instanceof L.Polygon)) {
+      l.setStyle({ ...style, radius: style === SEL_STYLE ? 9 : (style === HOVER_STYLE ? 8 : 6) });
+    } else if (l.setStyle) {
+      l.setStyle(style);
+    }
+    if (style !== DEFAULT_STYLE && l.bringToFront) l.bringToFront();
+  }
+}
+
+/* ============================================================
+   RENDER RESULTS LIST
+   ============================================================ */
+const activeFilters = new Set(['rue','place','impasse','chemin','remarquable']);
+const activeCommunes = new Set(); // populated after each search; empty = "none enabled"
+document.querySelectorAll('.filters input').forEach(chk => {
+  chk.onchange = () => {
+    if (chk.checked) activeFilters.add(chk.value); else activeFilters.delete(chk.value);
+    renderResults();
+  };
+});
+document.getElementById('filterInput').oninput = renderResults;
+
+function rebuildCommunesFilter() {
+  const el = document.getElementById('communesFilter');
+  if (!results.length) {
+    el.innerHTML = '<div class="empty">Lance une recherche pour voir les communes.</div>';
+    activeCommunes.clear();
+    return;
+  }
+  // Count results per commune
+  const counts = {};
+  for (const r of results) counts[r.commune] = (counts[r.commune] || 0) + 1;
+  const communes = Object.keys(counts).sort((a,b) => a.localeCompare(b,'fr'));
+  // Preserve existing selection if rebuilding; default = all on
+  if (!activeCommunes.size) communes.forEach(c => activeCommunes.add(c));
+  else {
+    // Remove communes that disappeared; keep toggled state for the rest.
+    for (const c of [...activeCommunes]) if (!counts[c]) activeCommunes.delete(c);
+  }
+  el.innerHTML = communes.map(c => `
+    <label style="display:flex;align-items:center;gap:6px;padding:2px 0;cursor:pointer">
+      <input type="checkbox" data-com="${esc(c)}" ${activeCommunes.has(c) ? 'checked' : ''}>
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(c)}</span>
+      <span style="color:#64748b;font-size:11px">${counts[c]}</span>
+    </label>
+  `).join('');
+  el.querySelectorAll('input[type=checkbox]').forEach(chk => {
+    chk.onchange = () => {
+      const c = chk.dataset.com;
+      if (chk.checked) activeCommunes.add(c); else activeCommunes.delete(c);
+      renderResults();
+    };
+  });
+}
+document.getElementById('communesAll').onclick = () => {
+  document.querySelectorAll('#communesFilter input[type=checkbox]').forEach(chk => {
+    chk.checked = true; activeCommunes.add(chk.dataset.com);
+  });
+  renderResults();
+};
+document.getElementById('communesNone').onclick = () => {
+  document.querySelectorAll('#communesFilter input[type=checkbox]').forEach(chk => {
+    chk.checked = false;
+  });
+  activeCommunes.clear();
+  renderResults();
+};
+
+function isVisible(r) {
+  const text = document.getElementById('filterInput').value.toLowerCase().trim();
+  if (!activeFilters.has(r.type)) return false;
+  if (!activeCommunes.has(r.commune)) return false;
+  if (text && !r.name.toLowerCase().includes(text)) return false;
+  return true;
+}
+function renderResults() {
+  const listEl = document.getElementById('resultsList');
+  const countEl = document.getElementById('resultsCount');
+  const visible = results.filter(isVisible);
+  countEl.textContent = results.length ? `${visible.length}/${results.length}` : '';
+
+  // Sync layer visibility with filters
+  for (const r of results) {
+    const show = isVisible(r);
+    for (const l of r.layers || []) {
+      if (show && !map.hasLayer(l)) l.addTo(map);
+      else if (!show && map.hasLayer(l)) map.removeLayer(l);
+    }
+  }
+
+  if (!visible.length) {
+    listEl.innerHTML = results.length
+      ? '<div class="empty">Aucun résultat avec ces filtres.</div>'
+      : '<div class="empty">Aucun résultat. Ajoute un cercle puis clique « Rechercher ».</div>';
+    return;
+  }
+
+  // Group by commune (sorted alphabetically, FR locale)
+  const byCommune = {};
+  for (const r of visible) (byCommune[r.commune] ||= []).push(r);
+  const communes = Object.keys(byCommune).sort((a,b) => a.localeCompare(b, 'fr'));
+
+  listEl.innerHTML = communes.map(com => {
+    const items = byCommune[com].slice().sort((a,b) => a.name.localeCompare(b.name, 'fr'));
+    return `<div class="commune-group" data-com="${esc(com)}">
+      <div class="commune-title">${esc(com)} <span style="font-weight:400;color:#64748b">(${items.length})</span></div>
+      <ul class="result-list">
+        ${items.map(r => `<li data-id="${r.id}" class="${r.id===selectedResultId?'selected':''}">
+          <span class="nm" title="${esc(r.name)}">${esc(r.name)}</span>
+          <span class="type-tag ${r.type}">${r.type}</span>
+        </li>`).join('')}
+      </ul>
+    </div>`;
+  }).join('');
+
+  listEl.querySelectorAll('.commune-title').forEach(t => {
+    t.onclick = () => t.parentElement.classList.toggle('collapsed');
+  });
+  listEl.querySelectorAll('.result-list li').forEach(li => {
+    li.onclick = () => selectResult(li.dataset.id, true);
+    li.onmouseenter = () => hoverResult(li.dataset.id);
+    li.onmouseleave = () => hoverResult(null);
+  });
+}
+
+function hoverResult(id) {
+  if (hoveredResultId && hoveredResultId !== id) {
+    const prev = results.find(r => r.id === hoveredResultId);
+    if (prev && prev.id !== selectedResultId) styleResult(prev, DEFAULT_STYLE);
+  }
+  hoveredResultId = id;
+  if (id) {
+    const r = results.find(r => r.id === id);
+    if (r && r.id !== selectedResultId) styleResult(r, HOVER_STYLE);
+  }
+}
+function selectResult(id, zoom) {
+  if (selectedResultId) {
+    const prev = results.find(r => r.id === selectedResultId);
+    if (prev) styleResult(prev, DEFAULT_STYLE);
+  }
+  selectedResultId = id;
+  const r = results.find(r => r.id === id);
+  if (!r) { renderResults(); return; }
+  styleResult(r, SEL_STYLE);
+  if (zoom && r.layers && r.layers.length) {
+    const group = L.featureGroup(r.layers);
+    const b = group.getBounds();
+    if (b.isValid()) map.fitBounds(b, { padding: [80,80], maxZoom: 17 });
+  }
+  // Reflect selection in the DOM (without full re-render)
+  document.querySelectorAll('.result-list li').forEach(li => {
+    const sel = li.dataset.id === id;
+    li.classList.toggle('selected', sel);
+    if (sel) li.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  });
+}
+
+/* ============================================================
+   EXPORT
+   ============================================================ */
+function download(name, content, mime) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = name; document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
+}
+document.getElementById('exportCsv').onclick = () => {
+  if (!results.length) { alert('Aucun résultat à exporter.'); return; }
+  const rows = [['nom','type','commune']];
+  const visible = results.filter(isVisible);
+  for (const r of visible) rows.push([r.name, r.type, r.commune]);
+  const csv = rows.map(row => row.map(v => `"${String(v).replace(/"/g,'""')}"`).join(';')).join('\r\n');
+  download('cercles-resultats.csv', '\uFEFF' + csv, 'text/csv;charset=utf-8');
+};
+document.getElementById('exportGeoJson').onclick = () => {
+  if (!results.length) { alert('Aucun résultat à exporter.'); return; }
+  const features = [];
+  const visible = results.filter(isVisible);
+  for (const r of visible) {
+    for (const el of r.elements) {
+      let geom = null;
+      if (el.type === 'node') geom = { type: 'Point', coordinates: [el.lon, el.lat] };
+      else if (el.geometry) {
+        const coords = el.geometry.map(p => [p.lon, p.lat]);
+        const closed = coords.length > 3
+          && coords[0][0] === coords[coords.length-1][0]
+          && coords[0][1] === coords[coords.length-1][1];
+        geom = closed ? { type: 'Polygon', coordinates: [coords] } : { type: 'LineString', coordinates: coords };
+      }
+      if (!geom) continue;
+      features.push({
+        type: 'Feature',
+        geometry: geom,
+        properties: { nom: r.name, type: r.type, commune: r.commune, osm_type: el.type, osm_id: el.id, tags: el.tags || {} }
+      });
+    }
+  }
+  download('cercles-resultats.geojson', JSON.stringify({ type: 'FeatureCollection', features }, null, 2), 'application/geo+json');
+};
+
+/* ============================================================
+   UTILS
+   ============================================================ */
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+/* ============================================================
+   DIAGNOSTIC
+   ============================================================ */
+document.getElementById('diagBtn').onclick = async () => {
+  const out = document.getElementById('diagOut');
+  out.style.display = 'block';
+  out.textContent = '';
+  const log = (s) => { out.textContent += s + '\n'; out.scrollTop = out.scrollHeight; };
+
+  log('=== Contexte ===');
+  log('URL page  : ' + location.href);
+  log('Protocole : ' + location.protocol + (location.protocol === 'file:' ? '  ⚠ file:// — certaines API refusent CORS depuis un fichier local' : ''));
+  log('Origin    : ' + (location.origin === 'null' ? 'null (file://)' : location.origin));
+  log('En ligne  : ' + (navigator.onLine ? 'oui' : 'NON (navigator.onLine = false)'));
+  log('User-Agent: ' + navigator.userAgent);
+  log('');
+
+  // Test 1: generic internet via a known CORS-friendly endpoint
+  log('=== Test réseau générique ===');
+  try {
+    const t0 = performance.now();
+    const r = await fetch('https://www.google.com/generate_204', { method: 'GET', mode: 'no-cors' });
+    log(`google.com/generate_204 : OK (${Math.round(performance.now()-t0)} ms, type=${r.type})`);
+  } catch(e) {
+    log('google.com/generate_204 : ÉCHEC — ' + (e.message || e));
+  }
+  try {
+    const t0 = performance.now();
+    const r = await fetch('https://httpbin.org/get');
+    log(`httpbin.org/get        : HTTP ${r.status} (${Math.round(performance.now()-t0)} ms)`);
+  } catch(e) {
+    log('httpbin.org/get        : ÉCHEC — ' + (e.message || e));
+  }
+  log('');
+
+  // Test 2: Nominatim (comparatif — utilise le même type de requête)
+  log('=== Test Nominatim ===');
+  try {
+    const t0 = performance.now();
+    const r = await fetch('https://nominatim.openstreetmap.org/status.php?format=json');
+    const j = await r.json();
+    log(`nominatim status      : HTTP ${r.status} (${Math.round(performance.now()-t0)} ms) — ${j.status || '?'}`);
+  } catch(e) {
+    log('nominatim status      : ÉCHEC — ' + (e.message || e));
+  }
+  log('');
+
+  // Test 3: chaque mirroir Overpass, en GET simple, puis en POST avec la vraie requête
+  const endpoints = [
+    'https://overpass-api.de/api/interpreter',
+    'https://overpass.kumi.systems/api/interpreter',
+    'https://overpass.private.coffee/api/interpreter',
+    'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
+    'https://overpass.osm.jp/api/interpreter'
+  ];
+  const tinyQuery = '[out:json][timeout:5];node(50.4674,4.8718,50.4675,4.8719);out 1;';
+
+  log('=== Test Overpass (GET + POST) ===');
+  for (const ep of endpoints) {
+    const host = new URL(ep).host;
+    // GET test
+    try {
+      const t0 = performance.now();
+      const url = ep + '?data=' + encodeURIComponent(tinyQuery);
+      const r = await fetch(url, { method: 'GET' });
+      const ms = Math.round(performance.now()-t0);
+      if (r.ok) {
+        const body = await r.text();
+        log(`[GET ] ${host.padEnd(40)} HTTP ${r.status} (${ms} ms, ${body.length} o)`);
+      } else {
+        log(`[GET ] ${host.padEnd(40)} HTTP ${r.status} (${ms} ms)`);
+      }
+    } catch(e) {
+      log(`[GET ] ${host.padEnd(40)} ÉCHEC — ${e.name}: ${e.message || e}`);
+    }
+    // POST test
+    try {
+      const t0 = performance.now();
+      const r = await fetch(ep, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'data=' + encodeURIComponent(tinyQuery)
+      });
+      const ms = Math.round(performance.now()-t0);
+      log(`[POST] ${host.padEnd(40)} HTTP ${r.status} (${ms} ms)`);
+    } catch(e) {
+      log(`[POST] ${host.padEnd(40)} ÉCHEC — ${e.name}: ${e.message || e}`);
+    }
+  }
+  log('');
+  log('=== Fin du diagnostic ===');
+  log('Copie-colle ce texte si tu veux que j\'analyse.');
+};
+
+/* ============================================================
+   CACHE — UI
+   ============================================================ */
+async function refreshCacheInfo() {
+  try {
+    const nC = await idbCount(STORE_CIRCLES);
+    const nA = await idbCount(STORE_ADMIN);
+    document.getElementById('cacheInfo').textContent =
+      `${nC} cercle(s) en cache · ${nA} zone(s) admin`;
+  } catch(e) {
+    document.getElementById('cacheInfo').textContent = 'Cache indisponible';
+  }
+}
+document.getElementById('clearCacheBtn').onclick = async () => {
+  if (!confirm('Vider tout le cache (cercles + frontières) ?')) return;
+  await idbClear(STORE_CIRCLES);
+  await idbClear(STORE_ADMIN);
+  adminBoundaries = [];
+  refreshCacheInfo();
+};
+
+/* ============================================================
+   STARTUP
+   ============================================================ */
+loadCircles();
+updateSearchBtn();
+refreshCacheInfo();
+</script>
+</body>
+</html>
