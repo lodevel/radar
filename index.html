@@ -170,6 +170,9 @@ primary.on('tileerror', (e) => {
   }
 });
 
+// Catch fast exits from the map without triggering layer mouseout
+map.getContainer().addEventListener('mouseleave', () => hoverResult(null));
+
 /* ============================================================
    STATE
    ============================================================ */
@@ -926,12 +929,18 @@ function renderResults() {
 function hoverResult(id) {
   if (hoveredResultId && hoveredResultId !== id) {
     const prev = results.find(r => r.id === hoveredResultId);
-    if (prev && prev.id !== selectedResultId) styleResult(prev, DEFAULT_STYLE);
+    if (prev) {
+      if (prev.id !== selectedResultId) styleResult(prev, DEFAULT_STYLE);
+      for (const l of prev.layers || []) l.closeTooltip && l.closeTooltip();
+    }
   }
   hoveredResultId = id;
   if (id) {
     const r = results.find(r => r.id === id);
     if (r && r.id !== selectedResultId) styleResult(r, HOVER_STYLE);
+  } else {
+    // Safety net: close all tooltips in case mouseout was missed
+    for (const r of results) for (const l of r.layers || []) l.closeTooltip && l.closeTooltip();
   }
 }
 function selectResult(id, zoom) {
