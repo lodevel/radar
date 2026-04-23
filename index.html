@@ -782,7 +782,7 @@ function addResultToMap(r) {
     layer.addTo(map);
     layer.on('click', () => selectResult(r.id, false));
     layer.on('mouseover', () => hoverResult(r.id));
-    layer.on('mouseout', () => hoverResult(null));
+    layer.on('mouseout', () => { hoverResult(null); layer.closeTooltip(); });
     layer.bindTooltip(`${r.name} — ${r.type}${r.commune ? ' · ' + r.commune : ''}`);
     layers.push(layer);
   }
