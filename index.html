@@ -174,7 +174,7 @@ primary.on('tileerror', (e) => {
    STATE
    ============================================================ */
 const COLORS = ['#dc2626','#2563eb','#16a34a','#9333ea','#ea580c','#0891b2','#db2777','#65a30d'];
-let circles = [];            // {id, lat, lng, radius, address, color, layer, marker}
+let circles = [];            // {id, lat, lng, radius, address, color, editUnit, layer, marker}
 let results = [];            // {id, name, type, commune, elements, layers}
 let selectedResultId = null;
 let hoveredResultId = null;
@@ -249,22 +249,23 @@ function circleCacheKey(c) {
 }
 function saveCircles() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(
-    circles.map(c => ({id:c.id, lat:c.lat, lng:c.lng, radius:c.radius, address:c.address, color:c.color}))
+    circles.map(c => ({id:c.id, lat:c.lat, lng:c.lng, radius:c.radius, address:c.address, color:c.color, editUnit:c.editUnit}))
   ));
 }
 function loadCircles() {
   const raw = safeParse(localStorage.getItem(STORAGE_KEY), []);
-  raw.forEach(c => addCircle(c.lat, c.lng, c.radius, c.address, c.color, c.id));
+  raw.forEach(c => addCircle(c.lat, c.lng, c.radius, c.address, c.color, c.id, c.editUnit));
 }
 
 /* ============================================================
    CIRCLES
    ============================================================ */
-function addCircle(lat, lng, radius, address, color, id) {
+function addCircle(lat, lng, radius, address, color, id, editUnit) {
   const c = {
     id: id || (Date.now() + '_' + Math.random().toString(36).slice(2,6)),
     lat, lng, radius, address,
-    color: color || COLORS[circles.length % COLORS.length]
+    color: color || COLORS[circles.length % COLORS.length],
+    editUnit: (editUnit === 'm' || editUnit === 'km') ? editUnit : null
   };
   c.layer = L.circle([lat, lng], {
     radius, color: c.color, weight: 2, fill: false
@@ -303,7 +304,8 @@ function renderCirclesList() {
   const el = document.getElementById('circlesList');
   if (!circles.length) { el.innerHTML = '<div class="empty">Aucun cercle.</div>'; return; }
   el.innerHTML = circles.map(c => {
-    const inKm = c.radius >= 1000;
+    const unit = (c.editUnit === 'm' || c.editUnit === 'km') ? c.editUnit : (c.radius >= 1000 ? 'km' : 'm');
+    const inKm = unit === 'km';
     const value = inKm ? (c.radius / 1000) : c.radius;
     return `
     <div class="circle-item">
@@ -328,6 +330,7 @@ function renderCirclesList() {
       // When switching units, keep the *actual* radius; re-render to refresh bounds.
       const c = circles.find(c => c.id === sel.dataset.id);
       if (!c) return;
+      c.editUnit = sel.value;
       renderCirclesList();
     };
   });
@@ -338,6 +341,7 @@ function updateCircleRadius(id, val, unit) {
   const radius = unit === 'km' ? val * 1000 : val;
   if (radius < 10) { alert('Rayon minimum : 10 m'); renderCirclesList(); return; }
   c.radius = radius;
+  c.editUnit = unit;
   c.layer.setRadius(radius);
   c.marker.setTooltipContent(`${c.address} — rayon ${fmtRadius(radius)}`);
   saveCircles();
