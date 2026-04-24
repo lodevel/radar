@@ -195,6 +195,7 @@
 <div id="map"></div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/@turf/turf@7/turf.min.js"></script>
 <script>
 "use strict";
 
@@ -589,6 +590,20 @@ let lineDrawPoints = [];
 let lineDrawMarkers = [];
 let lineDrawPreview = null;
 
+function buildBufferLayer(l) {
+  if (l.bufferLayer) { map.removeLayer(l.bufferLayer); l.bufferLayer = null; }
+  if (!window.turf || l.latlngs.length < 2) return;
+  try {
+    const coords = l.latlngs.map(ll => Array.isArray(ll) ? [ll[1], ll[0]] : [ll.lng, ll.lat]);
+    const lineGeoJSON = { type: 'Feature', geometry: { type: 'LineString', coordinates: coords } };
+    const buffered = turf.buffer(lineGeoJSON, l.distance / 1000, { units: 'kilometers', steps: 16 });
+    l.bufferLayer = L.geoJSON(buffered, {
+      style: { color: l.color, weight: 1.5, opacity: 0.8, fillColor: l.color, fillOpacity: 0.08, dashArray: '5 4' }
+    }).addTo(map);
+    l.bufferLayer.bringToBack();
+    l.layer.bringToFront();
+  } catch (e) { console.warn('buildBufferLayer:', e); }
+}
 function addLine(latlngs, distance, label, color, id, mode, editUnit) {
   const l = {
     id: id || (Date.now() + '_' + Math.random().toString(36).slice(2,6)),
@@ -601,6 +616,7 @@ function addLine(latlngs, distance, label, color, id, mode, editUnit) {
   };
   l.layer = L.polyline(latlngs, { color: l.color, weight: 3 }).addTo(map);
   l.layer.bindTooltip(`${l.label} — couloir ${fmtRadius(l.distance)}`);
+  buildBufferLayer(l);
   lines.push(l);
   renderLinesList();
   fitToCircles();
@@ -610,6 +626,7 @@ function addLine(latlngs, distance, label, color, id, mode, editUnit) {
 function removeLine(id) {
   const l = lines.find(l => l.id === id);
   if (!l) return;
+  if (l.bufferLayer) map.removeLayer(l.bufferLayer);
   map.removeLayer(l.layer);
   lines = lines.filter(x => x.id !== id);
   renderLinesList();
@@ -624,6 +641,7 @@ function updateLineDistance(id, val, unit) {
   l.distance = distance;
   l.editUnit = unit;
   l.layer.setTooltipContent(`${l.label} — couloir ${fmtRadius(l.distance)}`);
+  buildBufferLayer(l);
   saveLines();
 }
 function renderLinesList() {
