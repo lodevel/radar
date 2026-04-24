@@ -79,19 +79,6 @@
   <div class="section">
     <h2>Cercles actifs</h2>
     <div id="circlesList"><div class="empty">Aucun cercle.</div></div>
-    <div class="row" style="margin-top:10px;align-items:center">
-      <label style="font-size:12px;color:#475569;flex:0 0 auto">Mode</label>
-      <select id="modeSelect" style="flex:1">
-        <option value="or" selected>Union (∪) — dans ≥ 1 cercle</option>
-        <option value="and">Intersection (∩) — dans tous</option>
-        <option value="xor">Exclusif (⊕) — dans un seul</option>
-      </select>
-    </div>
-    <div class="row" style="margin-top:6px">
-      <button class="primary" id="searchBtn" disabled style="flex:2">Rechercher</button>
-      <button id="clearAllBtn" style="flex:1">Tout effacer</button>
-    </div>
-    <div id="searchStatus" class="progress"></div>
   </div>
 
   <div class="section">
@@ -111,6 +98,22 @@
         <button id="drawCancelBtn">✗ Annuler</button>
       </div>
     </div>
+  </div>
+
+  <div class="section">
+    <div class="row" style="align-items:center">
+      <label style="font-size:12px;color:#475569;flex:0 0 auto">Mode</label>
+      <select id="modeSelect" style="flex:1">
+        <option value="or" selected>Union (∪) — dans ≥ 1 zone</option>
+        <option value="and">Intersection (∩) — dans toutes</option>
+        <option value="xor">Exclusif (⊕) — dans une seule</option>
+      </select>
+    </div>
+    <div class="row" style="margin-top:6px">
+      <button class="primary" id="searchBtn" disabled style="flex:2">Rechercher</button>
+      <button id="clearAllBtn" style="flex:1">Tout effacer</button>
+    </div>
+    <div id="searchStatus" class="progress"></div>
   </div>
 
   <div class="section filters">
