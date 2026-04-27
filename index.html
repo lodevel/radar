@@ -49,6 +49,7 @@
   .type-tag.impasse { background: #fee2e2; color: #991b1b; }
   .type-tag.chemin { background: #d1fae5; color: #065f46; }
   .type-tag.remarquable { background: #ede9fe; color: #5b21b6; }
+  .pc-tag { font-size: 10px; padding: 1px 6px; border-radius: 8px; background: #f1f5f9; color: #475569; flex-shrink: 0; font-family: ui-monospace,Menlo,monospace; }
   .error { color: #b91c1c; background: #fee2e2; padding: 6px; border-radius: 4px; font-size: 12px; }
   .progress { font-size: 12px; color: #666; font-style: italic; margin-top: 6px; min-height: 14px; }
   .search-results { position: absolute; background: white; border: 1px solid #ccc; border-radius: 4px; max-height: 220px; overflow-y: auto; z-index: 1000; left: 0; right: 0; top: 100%; box-shadow: 0 4px 10px rgba(0,0,0,.1); }
@@ -123,6 +124,39 @@
         <button class="primary" id="lineFinishBtn" disabled>✔ Terminer</button>
         <button id="lineCancelBtn">✗ Annuler</button>
       </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Régions administratives</h2>
+    <div id="regionsList"><div class="empty">Aucune région.</div></div>
+    <div style="margin-top:8px">
+      <div style="position:relative">
+        <div class="row" style="margin-bottom:6px">
+          <input type="text" id="regionInput" placeholder="Nom (ex: Namur, Liège, Hainaut)" autocomplete="off" style="flex:2">
+          <select id="regionLevel" style="flex:1;max-width:120px">
+            <option value="">Tous</option>
+            <option value="8" selected>Commune</option>
+            <option value="7">Arrondissement</option>
+            <option value="6">Province</option>
+            <option value="4">Région</option>
+          </select>
+        </div>
+        <div id="regionResults" class="search-results" style="display:none"></div>
+      </div>
+      <div class="help">Sélectionne une commune, province ou région entière comme zone de recherche.</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Codes postaux</h2>
+    <div id="postcodesList"><div class="empty">Aucun code postal.</div></div>
+    <div style="margin-top:8px">
+      <div class="row" style="margin-bottom:6px">
+        <input type="text" id="postcodeInput" placeholder="Ex: 1000, 13*, 14??, 4500-4599" style="flex:2">
+        <button id="postcodeAddBtn" style="flex:0 0 auto">Ajouter</button>
+      </div>
+      <div class="help">Filtre les résultats par code postal. Wildcards : <code>*</code> (n chiffres), <code>?</code> (1 chiffre), <code>[5-9]</code> (classe), <code>1234-1299</code> (plage). Plusieurs entrées séparées par virgule.</div>
     </div>
   </div>
 
@@ -352,11 +386,12 @@ function removeCircle(id) {
   updateSearchBtn();
 }
 function fitToCircles() {
-  if (!circles.length && !zones.length && !lines.length) return;
+  if (!circles.length && !zones.length && !lines.length && !regions.some(r => r.layer)) return;
   const bounds = L.latLngBounds([]);
   circles.forEach(c => bounds.extend(c.layer.getBounds()));
   zones.forEach(z => bounds.extend(z.layer.getBounds()));
   lines.forEach(l => bounds.extend(l.layer.getBounds()));
+  regions.forEach(r => { if (r.layer) bounds.extend(r.layer.getBounds()); });
   if (bounds.isValid()) map.fitBounds(bounds, { padding: [40,40] });
 }
 function fmtRadius(r) { return r >= 1000 ? (r/1000) + ' km' : r + ' m'; }
@@ -418,7 +453,7 @@ function updateCircleRadius(id, val, unit) {
   saveCircles();
 }
 function updateSearchBtn() {
-  document.getElementById('searchBtn').disabled = !circles.length && !zones.length && !lines.length;
+  document.getElementById('searchBtn').disabled = !circles.length && !zones.length && !lines.length && !regions.length;
 }
 
 /* ============================================================
@@ -786,6 +821,373 @@ function buildLineQuery(l) {
 }
 
 /* ============================================================
+   REGIONS — relations admin OSM (commune, province, région...)
+   ============================================================ */
+const REGIONS_KEY = 'cercles-wallonie-regions-v1';
+let regions = [];   // {id, osmRelationId, name, adminLevel, mode, color, layer, outerRings, innerRings, bbox, loading, loadError}
+
+function regionCacheKey(osmRelationId) { return 'region:' + osmRelationId; }
+
+async function fetchRegionGeometry(osmRelationId) {
+  const key = regionCacheKey(osmRelationId);
+  const cached = await idbGet(STORE_ADMIN, key);
+  if (cached && cached.outerRings) return cached;
+  const q = `[out:json][timeout:60];relation(${osmRelationId});out body;>;out skel qt;`;
+  const data = await overpassFetch(q);
+  const parsed = parseAdminRelations(data);
+  if (!parsed.length) throw new Error('Géométrie introuvable pour la relation ' + osmRelationId);
+  const r = parsed[0];
+  const value = { outerRings: r.outerRings, innerRings: r.innerRings, bbox: r.bbox, name: r.name, ts: Date.now() };
+  await idbPut(STORE_ADMIN, key, value);
+  return value;
+}
+
+function regionDrawLayer(reg) {
+  if (!reg.outerRings || !reg.outerRings.length) return null;
+  // Leaflet polygon: [[outer], [hole], [hole]] — for multiple disjoint outers, use array of such
+  const polys = reg.outerRings.map(outer => {
+    const holes = (reg.innerRings || []).filter(inner => ringInsideOuter(inner, outer));
+    return [outer, ...holes];
+  });
+  return L.polygon(polys, { color: reg.color, weight: 2, fill: true, fillOpacity: 0.08, dashArray: '4 3' });
+}
+
+function ringInsideOuter(ring, outer) {
+  // cheap test: check if first vertex is inside the outer ring
+  if (!ring.length) return false;
+  const [lat, lng] = ring[0];
+  return pointInRing(lat, lng, outer);
+}
+
+function regionContainsPoint(reg, lat, lng) {
+  if (!reg.outerRings) return false;
+  const bb = reg.bbox;
+  if (bb && (lat < bb.s || lat > bb.n || lng < bb.w || lng > bb.e)) return false;
+  let inside = false;
+  for (const ring of reg.outerRings) if (pointInRing(lat, lng, ring)) { inside = true; break; }
+  if (!inside) return false;
+  for (const ring of (reg.innerRings || [])) if (pointInRing(lat, lng, ring)) { inside = false; break; }
+  return inside;
+}
+
+function regionContainsElement(reg, el) {
+  if (!reg.outerRings) return false;
+  if (el.type === 'node') return regionContainsPoint(reg, el.lat, el.lon);
+  if (el.geometry && el.geometry.length) {
+    // Check a few sample points (start, mid, end) — if any inside, count as inside
+    const pts = [
+      el.geometry[0],
+      el.geometry[Math.floor(el.geometry.length/2)],
+      el.geometry[el.geometry.length-1]
+    ];
+    for (const p of pts) if (regionContainsPoint(reg, p.lat, p.lon)) return true;
+    return false;
+  }
+  return false;
+}
+
+async function addRegion(osmRelationId, name, adminLevel, color, id, mode) {
+  // Avoid duplicates
+  if (regions.some(r => String(r.osmRelationId) === String(osmRelationId))) return;
+  const reg = {
+    id: id || (Date.now() + '_' + Math.random().toString(36).slice(2,6)),
+    osmRelationId: String(osmRelationId),
+    name: name || ('Région ' + osmRelationId),
+    adminLevel: adminLevel || null,
+    color: color || COLORS[(circles.length + zones.length + lines.length + regions.length) % COLORS.length],
+    mode: mode || 'add',
+    layer: null,
+    outerRings: null,
+    innerRings: null,
+    bbox: null,
+    loading: true,
+    loadError: null
+  };
+  regions.push(reg);
+  renderRegionsList();
+  saveRegions();
+  updateSearchBtn();
+  try {
+    const geom = await fetchRegionGeometry(reg.osmRelationId);
+    reg.outerRings = geom.outerRings;
+    reg.innerRings = geom.innerRings;
+    reg.bbox = geom.bbox;
+    if (geom.name && (!name || name === reg.name)) reg.name = geom.name;
+    reg.loading = false;
+    const layer = regionDrawLayer(reg);
+    if (layer) {
+      reg.layer = layer.addTo(map);
+      reg.layer.bindTooltip(reg.name);
+    }
+    renderRegionsList();
+    fitToCircles();
+  } catch(e) {
+    console.warn('Région : échec géométrie', e);
+    reg.loading = false;
+    reg.loadError = e.message || String(e);
+    renderRegionsList();
+  }
+}
+
+function removeRegion(id) {
+  const r = regions.find(r => r.id === id);
+  if (!r) return;
+  if (r.layer) map.removeLayer(r.layer);
+  regions = regions.filter(x => x.id !== id);
+  renderRegionsList();
+  saveRegions();
+  updateSearchBtn();
+}
+
+function renderRegionsList() {
+  const el = document.getElementById('regionsList');
+  if (!regions.length) { el.innerHTML = '<div class="empty">Aucune région.</div>'; return; }
+  el.innerHTML = regions.map(r => {
+    const isSub = r.mode === 'sub';
+    const lvlLabel = ({ '4':'Région','6':'Province','7':'Arrondissement','8':'Commune' })[r.adminLevel] || '';
+    const status = r.loading ? ' <span style="color:#64748b;font-size:11px">⏳</span>'
+      : r.loadError ? ` <span style="color:#b91c1c;font-size:11px" title="${esc(r.loadError)}">⚠</span>`
+      : '';
+    return `
+    <div class="circle-item">
+      <button class="mode-toggle ${isSub ? 'sub' : 'add'}" data-id="${r.id}" title="${isSub ? 'Soustractif — cliquez pour rendre additif' : 'Additif — cliquez pour rendre soustractif'}">${isSub ? '−' : '+'}</button>
+      <div class="color-dot" style="border-color:${r.color};border-radius:2px"></div>
+      <div class="addr" title="${esc(r.name)}">${esc(r.name)}${status}</div>
+      ${lvlLabel ? `<span style="font-size:11px;color:#64748b;white-space:nowrap">${lvlLabel}</span>` : ''}
+      <button class="rm" data-id="${r.id}" title="Retirer">×</button>
+    </div>`;
+  }).join('');
+  el.querySelectorAll('button.mode-toggle').forEach(b => {
+    b.onclick = () => {
+      const r = regions.find(r => r.id === b.dataset.id);
+      if (!r) return;
+      r.mode = r.mode === 'sub' ? 'add' : 'sub';
+      saveRegions();
+      renderRegionsList();
+    };
+  });
+  el.querySelectorAll('button.rm').forEach(b => b.onclick = () => removeRegion(b.dataset.id));
+}
+
+function saveRegions() {
+  localStorage.setItem(REGIONS_KEY, JSON.stringify(
+    regions.map(r => ({ id: r.id, osmRelationId: r.osmRelationId, name: r.name, adminLevel: r.adminLevel, color: r.color, mode: r.mode }))
+  ));
+}
+function loadRegions() {
+  const raw = safeParse(localStorage.getItem(REGIONS_KEY), []);
+  raw.forEach(r => addRegion(r.osmRelationId, r.name, r.adminLevel, r.color, r.id, r.mode));
+}
+
+function buildRegionQuery(reg) {
+  const highwayRe = 'residential|primary|secondary|tertiary|unclassified|living_street|service|footway|path|track|pedestrian|road|cycleway|steps|trunk|primary_link|secondary_link|tertiary_link|trunk_link';
+  const tourismRe = 'attraction|artwork|viewpoint|museum';
+  const areaId = 3600000000 + Number(reg.osmRelationId);
+  const parts = [
+    `way(area.a)[highway~"^(${highwayRe})$"][name];`,
+    `way(area.a)[place=square];`,
+    `way(area.a)[leisure=plaza];`,
+    `node(area.a)[place=square];`,
+    `node(area.a)[historic];`,
+    `way(area.a)[historic];`,
+    `node(area.a)[tourism~"^(${tourismRe})$"];`,
+    `way(area.a)[tourism~"^(${tourismRe})$"];`
+  ];
+  return `[out:json][timeout:180];\narea(${areaId})->.a;\n(\n  ${parts.join('\n  ')}\n);\nout tags geom;`;
+}
+
+function regionCacheKeyForElements(reg) { return 'reg-elts:' + reg.osmRelationId; }
+
+/* --- Region search via Nominatim --- */
+const regionInput = document.getElementById('regionInput');
+const regionResults = document.getElementById('regionResults');
+const regionLevel = document.getElementById('regionLevel');
+let regionSearchTimeout;
+regionInput.addEventListener('input', () => {
+  clearTimeout(regionSearchTimeout);
+  const q = regionInput.value.trim();
+  if (q.length < 2) { regionResults.style.display = 'none'; return; }
+  regionSearchTimeout = setTimeout(() => doRegionSearch(q), 400);
+});
+regionLevel.addEventListener('change', () => {
+  const q = regionInput.value.trim();
+  if (q.length >= 2) doRegionSearch(q);
+});
+async function doRegionSearch(q) {
+  const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&countrycodes=be&limit=15&addressdetails=1&extratags=1&accept-language=fr`;
+  try {
+    const r = await fetch(url);
+    const data = await r.json();
+    const wantedLvl = regionLevel.value;
+    const filtered = data.filter(d => {
+      if (d.osm_type !== 'relation') return false;
+      const lvl = d.extratags && d.extratags.admin_level;
+      if (wantedLvl) return String(lvl) === String(wantedLvl);
+      // No filter: keep boundary/administrative relations only
+      return d.class === 'boundary' || (d.extratags && d.extratags.admin_level);
+    });
+    if (!filtered.length) {
+      regionResults.innerHTML = '<div>Aucune région trouvée</div>';
+      regionResults.style.display = 'block';
+      return;
+    }
+    regionResults.innerHTML = filtered.map((d, i) => {
+      const lvl = (d.extratags && d.extratags.admin_level) || '';
+      const lvlLabel = ({ '4':'Région','6':'Province','7':'Arr.','8':'Commune' })[lvl] || (lvl ? 'niv.' + lvl : '');
+      return `<div data-i="${i}"><strong>${esc(d.display_name.split(',')[0])}</strong>${lvlLabel ? ` <span style="color:#64748b">— ${lvlLabel}</span>` : ''}<br><small style="color:#64748b">${esc(d.display_name)}</small></div>`;
+    }).join('');
+    regionResults.style.display = 'block';
+    regionResults.querySelectorAll('div[data-i]').forEach(div => {
+      div.onclick = () => {
+        const d = filtered[+div.dataset.i];
+        const lvl = (d.extratags && d.extratags.admin_level) || null;
+        const shortName = d.display_name.split(',')[0].trim();
+        addRegion(d.osm_id, shortName, lvl);
+        regionInput.value = '';
+        regionResults.style.display = 'none';
+      };
+    });
+  } catch(e) {
+    regionResults.innerHTML = '<div>Erreur de recherche</div>';
+    regionResults.style.display = 'block';
+  }
+}
+document.addEventListener('click', e => {
+  if (!regionInput.contains(e.target) && !regionResults.contains(e.target)) regionResults.style.display = 'none';
+});
+
+/* ============================================================
+   POSTCODES — filter by addr:postcode with wildcard patterns
+   ============================================================ */
+const POSTCODES_KEY = 'cercles-wallonie-postcodes-v1';
+let postcodes = []; // {id, pattern, mode, _matcher}
+
+function compilePostcodePattern(raw) {
+  const p = String(raw).trim();
+  if (!p) throw new Error('Motif vide');
+  // Range: digits-digits, same length recommended but not required
+  const m = p.match(/^(\d+)\s*-\s*(\d+)$/);
+  if (m) {
+    const lo = +m[1], hi = +m[2];
+    if (lo > hi) throw new Error(`Plage invalide : ${p}`);
+    return (pc) => {
+      if (!/^\d+$/.test(pc)) return false;
+      const n = +pc;
+      return n >= lo && n <= hi;
+    };
+  }
+  // Pattern with wildcards: convert to regex.
+  // Allowed atoms: digit, *, ?, [..-..]
+  let re = '^';
+  let i = 0;
+  while (i < p.length) {
+    const ch = p[i];
+    if (ch === '*') { re += '\\d*'; i++; }
+    else if (ch === '?') { re += '\\d'; i++; }
+    else if (ch === '[') {
+      const close = p.indexOf(']', i);
+      if (close < 0) throw new Error(`Crochet non fermé dans : ${p}`);
+      const inside = p.slice(i+1, close);
+      if (!/^[\d\-]+$/.test(inside)) throw new Error(`Classe invalide [${inside}] dans : ${p}`);
+      re += '[' + inside + ']';
+      i = close + 1;
+    }
+    else if (/\d/.test(ch)) { re += ch; i++; }
+    else if (ch === ' ') { i++; }
+    else throw new Error(`Caractère invalide '${ch}' dans : ${p}`);
+  }
+  re += '$';
+  const rx = new RegExp(re);
+  return (pc) => rx.test(pc);
+}
+
+function addPostcodeEntry(pattern, mode, id) {
+  const trimmed = String(pattern || '').trim();
+  if (!trimmed) return;
+  let matcher;
+  try { matcher = compilePostcodePattern(trimmed); }
+  catch(e) { alert(e.message || String(e)); return; }
+  postcodes.push({
+    id: id || (Date.now() + '_' + Math.random().toString(36).slice(2,6)),
+    pattern: trimmed,
+    mode: mode || 'add',
+    _matcher: matcher
+  });
+  renderPostcodesList();
+  savePostcodes();
+}
+
+function removePostcodeEntry(id) {
+  postcodes = postcodes.filter(p => p.id !== id);
+  renderPostcodesList();
+  savePostcodes();
+}
+
+function renderPostcodesList() {
+  const el = document.getElementById('postcodesList');
+  if (!postcodes.length) { el.innerHTML = '<div class="empty">Aucun code postal.</div>'; return; }
+  el.innerHTML = postcodes.map(p => {
+    const isSub = p.mode === 'sub';
+    return `
+    <div class="circle-item">
+      <button class="mode-toggle ${isSub ? 'sub' : 'add'}" data-id="${p.id}" title="${isSub ? 'Soustractif — cliquez pour rendre additif' : 'Additif — cliquez pour rendre soustractif'}">${isSub ? '−' : '+'}</button>
+      <span class="pc-tag">${esc(p.pattern)}</span>
+      <div class="addr" style="flex:1"></div>
+      <button class="rm" data-id="${p.id}" title="Retirer">×</button>
+    </div>`;
+  }).join('');
+  el.querySelectorAll('button.mode-toggle').forEach(b => {
+    b.onclick = () => {
+      const p = postcodes.find(p => p.id === b.dataset.id);
+      if (!p) return;
+      p.mode = p.mode === 'sub' ? 'add' : 'sub';
+      savePostcodes();
+      renderPostcodesList();
+    };
+  });
+  el.querySelectorAll('button.rm').forEach(b => b.onclick = () => removePostcodeEntry(b.dataset.id));
+}
+
+function savePostcodes() {
+  localStorage.setItem(POSTCODES_KEY, JSON.stringify(
+    postcodes.map(p => ({ id: p.id, pattern: p.pattern, mode: p.mode }))
+  ));
+}
+function loadPostcodes() {
+  const raw = safeParse(localStorage.getItem(POSTCODES_KEY), []);
+  raw.forEach(p => addPostcodeEntry(p.pattern, p.mode, p.id));
+}
+
+/** Returns true if postcode is allowed by current postcode filters.
+ *  - No entries: pass-through (true).
+ *  - Empty postcode: pass only if there are no additive entries (so a postcode
+ *    filter implicitly excludes elements without addr:postcode).
+ *  - Otherwise: must match at least one additive entry (if any) and no soustractive entry. */
+function postcodeAllowed(pc) {
+  if (!postcodes.length) return true;
+  const adds = postcodes.filter(p => p.mode !== 'sub');
+  const subs = postcodes.filter(p => p.mode === 'sub');
+  const code = String(pc || '').trim();
+  if (!code) return adds.length === 0;
+  if (subs.some(p => p._matcher(code))) return false;
+  if (adds.length === 0) return true;
+  return adds.some(p => p._matcher(code));
+}
+
+document.getElementById('postcodeAddBtn').onclick = () => {
+  const inp = document.getElementById('postcodeInput');
+  const v = inp.value.trim();
+  if (!v) return;
+  // Allow comma-separated bulk add
+  const parts = v.split(',').map(s => s.trim()).filter(Boolean);
+  for (const p of parts) addPostcodeEntry(p, 'add');
+  inp.value = '';
+};
+document.getElementById('postcodeInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); document.getElementById('postcodeAddBtn').click(); }
+});
+
+/* ============================================================
    ADMIN BOUNDARIES — résolution de commune hors-ligne
    On télécharge une fois les frontières admin_level=8 (communes BE)
    qui couvrent la bbox englobant tous les cercles, puis on fait
@@ -822,6 +1224,11 @@ function bboxOfAreas() {
       if (lat - dLat < s) s = lat - dLat; if (lat + dLat > n) n = lat + dLat;
       if (lng - dLng < w) w = lng - dLng; if (lng + dLng > e) e = lng + dLng;
     }
+  }
+  for (const r of regions) {
+    if (!r.bbox) continue;
+    if (r.bbox.s < s) s = r.bbox.s; if (r.bbox.n > n) n = r.bbox.n;
+    if (r.bbox.w < w) w = r.bbox.w; if (r.bbox.e > e) e = r.bbox.e;
   }
   return { s, w, n, e };
 }
@@ -1076,26 +1483,39 @@ function elementCentroid(el) {
    ============================================================ */
 document.getElementById('searchBtn').onclick = runSearch;
 document.getElementById('clearAllBtn').onclick = () => {
-  if (!circles.length && !zones.length && !lines.length) return;
-  const total = circles.length + zones.length + lines.length;
-  if (!confirm(`Supprimer les ${total} cercle(s)/zone(s)/ligne(s) ?`)) return;
+  if (!circles.length && !zones.length && !lines.length && !regions.length) return;
+  const total = circles.length + zones.length + lines.length + regions.length;
+  if (!confirm(`Supprimer les ${total} cercle(s)/zone(s)/ligne(s)/région(s) ?`)) return;
   [...circles].forEach(c => removeCircle(c.id));
   [...zones].forEach(z => removeZone(z.id));
   [...lines].forEach(l => removeLine(l.id));
+  [...regions].forEach(r => removeRegion(r.id));
   clearResults();
 };
 
 async function runSearch() {
-  if (!circles.length && !zones.length && !lines.length) return;
+  if (!circles.length && !zones.length && !lines.length && !regions.length) return;
   const btn = document.getElementById('searchBtn');
   const status = document.getElementById('searchStatus');
   btn.disabled = true; btn.textContent = 'Chargement…';
   clearResults();
 
+  // Wait for any region geometries still loading (so bbox is correct)
+  const pendingRegions = regions.filter(r => r.loading);
+  if (pendingRegions.length) {
+    status.textContent = `Attente du chargement de ${pendingRegions.length} région(s)…`;
+    // Poll briefly — addRegion mutates r.loading when done.
+    const start = Date.now();
+    while (regions.some(r => r.loading) && Date.now() - start < 60000) {
+      await new Promise(res => setTimeout(res, 200));
+    }
+  }
+
   console.group('[Cercles] Recherche');
   console.log('Cercles actifs :', circles.map(c => ({lat: c.lat, lng: c.lng, radius: c.radius, address: c.address, mode: c.mode})));
   console.log('Zones actives :', zones.map(z => ({label: z.label, pts: z.latlngs.length, mode: z.mode})));
   console.log('Lignes actives :', lines.map(l => ({label: l.label, pts: l.latlngs.length, distance: l.distance, mode: l.mode})));
+  console.log('Régions actives :', regions.map(r => ({name: r.name, osmRelationId: r.osmRelationId, adminLevel: r.adminLevel, mode: r.mode})));
 
   // --- 1. Fetch Overpass data per area (circles + zones + lines), with IndexedDB cache ---
   // Keep track of which areas each element belongs to for logical ops (AND/OR/XOR).
@@ -1168,6 +1588,32 @@ async function runSearch() {
         e.areaIds.add(l.id);
       }
     }
+    for (let i = 0; i < regions.length; i++) {
+      const reg = regions[i];
+      if (reg.loading || reg.loadError) {
+        status.textContent = `Région ${i+1}/${regions.length} — géométrie indisponible, ignorée`;
+        continue;
+      }
+      const key = regionCacheKeyForElements(reg);
+      let entry = await idbGet(STORE_CIRCLES, key);
+      if (entry) {
+        cachedCount++;
+        status.textContent = `Région ${i+1}/${regions.length} — cache (${entry.elements.length} éléments)`;
+      } else {
+        status.textContent = `Région ${i+1}/${regions.length} (${reg.name}) — requête Overpass…`;
+        const q = buildRegionQuery(reg);
+        const data = await overpassFetch(q);
+        entry = { elements: data.elements || [], ts: Date.now() };
+        await idbPut(STORE_CIRCLES, key, entry);
+        fetchedCount++;
+      }
+      for (const el of entry.elements) {
+        const k = el.type + '/' + el.id;
+        let e = elementAreas.get(k);
+        if (!e) { e = { el, areaIds: new Set() }; elementAreas.set(k, e); }
+        e.areaIds.add(reg.id);
+      }
+    }
   } catch(e) {
     status.innerHTML = `<span class="error">Erreur Overpass : ${esc(e.message || e)}</span>`;
     btn.disabled = false; btn.textContent = 'Rechercher';
@@ -1181,12 +1627,14 @@ async function runSearch() {
   const addIds = new Set([
     ...circles.filter(c => c.mode !== 'sub').map(c => c.id),
     ...zones.filter(z => z.mode !== 'sub').map(z => z.id),
-    ...lines.filter(l => l.mode !== 'sub').map(l => l.id)
+    ...lines.filter(l => l.mode !== 'sub').map(l => l.id),
+    ...regions.filter(r => r.mode !== 'sub' && !r.loadError).map(r => r.id)
   ]);
   const subIds = new Set([
     ...circles.filter(c => c.mode === 'sub').map(c => c.id),
     ...zones.filter(z => z.mode === 'sub').map(z => z.id),
-    ...lines.filter(l => l.mode === 'sub').map(l => l.id)
+    ...lines.filter(l => l.mode === 'sub').map(l => l.id),
+    ...regions.filter(r => r.mode === 'sub' && !r.loadError).map(r => r.id)
   ]);
   const nAddAreas = addIds.size;
   console.log(`Zones : ${cachedCount} depuis cache, ${fetchedCount} téléchargées → ${elementAreas.size} éléments uniques · mode=${mode} · additifs=${nAddAreas} · soustractifs=${subIds.size}`);
@@ -1205,6 +1653,13 @@ async function runSearch() {
   }
   console.log(`Après opération logique (${mode}) : ${filtered.length} éléments`);
 
+  // Postcode filter (additive/subtractive on addr:postcode tag)
+  let postcodeFiltered = filtered;
+  if (postcodes.length) {
+    postcodeFiltered = filtered.filter(el => postcodeAllowed(el.tags && el.tags['addr:postcode']));
+    console.log(`Après filtre codes postaux : ${postcodeFiltered.length} éléments (sur ${filtered.length})`);
+  }
+
   // --- 2. Load admin boundaries (with cache) ---
   status.textContent = 'Chargement des frontières communales…';
   try {
@@ -1218,13 +1673,13 @@ async function runSearch() {
   // --- 3. Filter, classify, assign communes locally ---
   status.textContent = 'Traitement local…';
   const byType = {};
-  for (const el of filtered) {
+  for (const el of postcodeFiltered) {
     const t = classify(el);
     byType[t] = (byType[t] || 0) + 1;
   }
   console.log('Par type :', byType);
 
-  const raw = filtered.filter(el => !!displayName(el));
+  const raw = postcodeFiltered.filter(el => !!displayName(el));
   console.log(`Avec nom : ${raw.length}`);
   console.groupEnd();
 
@@ -1233,6 +1688,7 @@ async function runSearch() {
     const t = el.tags || {};
     const type = classify(el);
     const name = displayName(el);
+    const postcode = t['addr:postcode'] || '';
     let communes;
     if (t['addr:city']) {
       communes = [t['addr:city']];
@@ -1249,7 +1705,7 @@ async function runSearch() {
       const c = elementCentroid(el);
       communes = c ? [communeForPoint(c[0], c[1])] : ['Inconnu'];
     }
-    for (const commune of communes) enriched.push({ el, name, type, commune });
+    for (const commune of communes) enriched.push({ el, name, type, commune, postcode });
   }
   status.textContent = `Déduplication…`;
 
@@ -1258,17 +1714,24 @@ async function runSearch() {
   const dedupMap = new Map();
   for (const r of enriched) {
     const key = `${(r.name||'').toLowerCase().trim()}__${r.commune.toLowerCase()}__${r.type}`;
-    if (!dedupMap.has(key)) dedupMap.set(key, { name: r.name, type: r.type, commune: r.commune, elements: [] });
-    dedupMap.get(key).elements.push(r.el);
+    if (!dedupMap.has(key)) dedupMap.set(key, { name: r.name, type: r.type, commune: r.commune, postcodes: new Set(), elements: [] });
+    const entry = dedupMap.get(key);
+    if (r.postcode) entry.postcodes.add(r.postcode);
+    entry.elements.push(r.el);
   }
-  results = Array.from(dedupMap.values()).map((r, i) => ({ ...r, id: 'r' + i }));
+  results = Array.from(dedupMap.values()).map((r, i) => ({
+    ...r,
+    postcode: [...r.postcodes].sort().join(', '),
+    id: 'r' + i
+  }));
 
   results.forEach(addResultToMap);
   activeCommunes.clear(); // reset so rebuildCommunesFilter re-enables everything
   rebuildCommunesFilter();
   const summary = [`${results.length} entrées`];
-  if (cachedCount) summary.push(`${cachedCount} cercle(s) depuis cache`);
-  if (fetchedCount) summary.push(`${fetchedCount} cercle(s) téléchargé(s)`);
+  if (cachedCount) summary.push(`${cachedCount} zone(s) depuis cache`);
+  if (fetchedCount) summary.push(`${fetchedCount} zone(s) téléchargée(s)`);
+  if (postcodes.length) summary.push(`filtre PC : ${postcodes.length}`);
   status.textContent = summary.join(' · ');
   btn.disabled = false; btn.textContent = 'Rechercher';
   renderResults();
@@ -1300,7 +1763,7 @@ function addResultToMap(r) {
     layer.on('click', () => selectResult(r.id, false));
     layer.on('mouseover', () => hoverResult(r.id));
     layer.on('mouseout', () => { hoverResult(null); layer.closeTooltip(); });
-    layer.bindTooltip(`${r.name} — ${r.type}${r.commune ? ' · ' + r.commune : ''}`);
+    layer.bindTooltip(`${r.name} — ${r.type}${r.commune ? ' · ' + r.commune : ''}${r.postcode ? ' (' + r.postcode + ')' : ''}`);
     layers.push(layer);
   }
   r.layers = layers;
@@ -1424,6 +1887,7 @@ function renderResults() {
       <ul class="result-list">
         ${items.map(r => `<li data-id="${r.id}" class="${r.id===selectedResultId?'selected':''}">
           <span class="nm" title="${esc(r.name)}">${esc(r.name)}</span>
+          ${r.postcode ? `<span class="pc-tag" title="Code postal">${esc(r.postcode)}</span>` : ''}
           <span class="type-tag ${r.type}">${r.type}</span>
         </li>`).join('')}
       </ul>
@@ -1491,9 +1955,9 @@ function download(name, content, mime) {
 }
 document.getElementById('exportCsv').onclick = () => {
   if (!results.length) { alert('Aucun résultat à exporter.'); return; }
-  const rows = [['nom','type','commune']];
+  const rows = [['nom','type','commune','code_postal']];
   const visible = results.filter(isVisible);
-  for (const r of visible) rows.push([r.name, r.type, r.commune]);
+  for (const r of visible) rows.push([r.name, r.type, r.commune, r.postcode || '']);
   const csv = rows.map(row => row.map(v => `"${String(v).replace(/"/g,'""')}"`).join(';')).join('\r\n');
   download('cercles-resultats.csv', '\uFEFF' + csv, 'text/csv;charset=utf-8');
 };
@@ -1516,7 +1980,7 @@ document.getElementById('exportGeoJson').onclick = () => {
       features.push({
         type: 'Feature',
         geometry: geom,
-        properties: { nom: r.name, type: r.type, commune: r.commune, osm_type: el.type, osm_id: el.id, tags: el.tags || {} }
+        properties: { nom: r.name, type: r.type, commune: r.commune, code_postal: r.postcode || '', osm_type: el.type, osm_id: el.id, tags: el.tags || {} }
       });
     }
   }
@@ -1651,6 +2115,8 @@ document.getElementById('clearCacheBtn').onclick = async () => {
 loadCircles();
 loadZones();
 loadLines();
+loadRegions();
+loadPostcodes();
 updateSearchBtn();
 refreshCacheInfo();
 </script>
