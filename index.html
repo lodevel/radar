@@ -1088,7 +1088,11 @@ function compilePostcodePattern(raw) {
       const close = p.indexOf(']', i);
       if (close < 0) throw new Error(`Crochet non fermé dans : ${p}`);
       const inside = p.slice(i+1, close);
-      if (!/^[\d\-]+$/.test(inside)) throw new Error(`Classe invalide [${inside}] dans : ${p}`);
+      // Allow only single digits or digit-digit ranges, comma-free, e.g. [5], [5-9], [02468], [0-35-9].
+      // Reject leading/trailing/consecutive '-' to avoid invalid or surprising regex classes.
+      if (!inside || !/^(\d|\d-\d)+$/.test(inside)) {
+        throw new Error(`Classe invalide [${inside}] dans : ${p}`);
+      }
       re += '[' + inside + ']';
       i = close + 1;
     }
@@ -1504,10 +1508,15 @@ async function runSearch() {
   const pendingRegions = regions.filter(r => r.loading);
   if (pendingRegions.length) {
     status.textContent = `Attente du chargement de ${pendingRegions.length} région(s)…`;
-    // Poll briefly — addRegion mutates r.loading when done.
     const start = Date.now();
-    while (regions.some(r => r.loading) && Date.now() - start < 60000) {
+    const TIMEOUT_MS = 60000;
+    while (regions.some(r => r.loading) && Date.now() - start < TIMEOUT_MS) {
       await new Promise(res => setTimeout(res, 200));
+    }
+    const stillLoading = regions.filter(r => r.loading).length;
+    if (stillLoading) {
+      console.warn(`${stillLoading} région(s) toujours en chargement après ${TIMEOUT_MS/1000}s — ignorée(s).`);
+      status.textContent = `${stillLoading} région(s) sans géométrie après délai — recherche poursuivie sans elles.`;
     }
   }
 
@@ -1714,8 +1723,11 @@ async function runSearch() {
   const dedupMap = new Map();
   for (const r of enriched) {
     const key = `${(r.name||'').toLowerCase().trim()}__${r.commune.toLowerCase()}__${r.type}`;
-    if (!dedupMap.has(key)) dedupMap.set(key, { name: r.name, type: r.type, commune: r.commune, postcodes: new Set(), elements: [] });
-    const entry = dedupMap.get(key);
+    let entry = dedupMap.get(key);
+    if (!entry) {
+      entry = { name: r.name, type: r.type, commune: r.commune, postcodes: new Set(), elements: [] };
+      dedupMap.set(key, entry);
+    }
     if (r.postcode) entry.postcodes.add(r.postcode);
     entry.elements.push(r.el);
   }
