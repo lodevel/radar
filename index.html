@@ -63,6 +63,13 @@
   button.mode-toggle { padding: 1px 5px; font-size: 12px; font-weight: bold; min-width: 22px; border-radius: 3px; flex-shrink: 0; }
   button.mode-toggle.add { background: #dcfce7; color: #16a34a; border-color: #86efac; }
   button.mode-toggle.sub { background: #fee2e2; color: #dc2626; border-color: #fca5a5; }
+  button.marking-active { background: #fef3c7; border-color: #f59e0b; color: #92400e; }
+  button.marking-active:hover { background: #fde68a; }
+  .memory-item { display: flex; align-items: center; gap: 6px; padding: 4px 0; border-bottom: 1px solid #eee; }
+  .memory-item:last-child { border-bottom: none; }
+  .memory-item .mem-name { flex: 1; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .memory-item .mem-date { font-size: 11px; color: #64748b; white-space: nowrap; flex-shrink: 0; }
+  .memory-item .mem-load { padding: 2px 7px; font-size: 12px; flex-shrink: 0; }
 </style>
 </head>
 <body>
@@ -124,6 +131,22 @@
         <button class="primary" id="lineFinishBtn" disabled>✔ Terminer</button>
         <button id="lineCancelBtn">✗ Annuler</button>
       </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Repères</h2>
+    <div id="spotsList"><div class="empty">Aucun repère.</div></div>
+    <div id="spotIdleControls" style="margin-top:8px">
+      <button id="markSpotBtn" style="width:100%">📍 Marquer un point</button>
+      <div class="help">Cliquez sur la carte pour placer un repère personnalisé.</div>
+    </div>
+    <div id="spotActiveControls" style="display:none;margin-top:8px">
+      <div class="draw-active-hint" style="margin-bottom:6px">
+        📍 Mode repère actif<br>
+        <small>Cliquez sur la carte pour placer un repère. Échap pour annuler.</small>
+      </div>
+      <button id="spotCancelBtn" style="width:100%">✗ Annuler</button>
     </div>
   </div>
 
@@ -217,6 +240,18 @@
     <h2>Cache</h2>
     <div id="cacheInfo" style="font-size:12px;color:#475569;margin-bottom:6px">—</div>
     <button id="clearCacheBtn" style="width:100%">Vider le cache</button>
+  </div>
+
+  <div class="section">
+    <h2>Emplacements mémoire</h2>
+    <div id="memorySlotsList"><div class="empty">Aucun emplacement.</div></div>
+    <div style="margin-top:8px">
+      <div class="row" style="margin-bottom:6px">
+        <input type="text" id="memoryNameInput" placeholder="Nom de l'emplacement">
+        <button id="memorySaveBtn" style="flex:0 0 auto">Sauvegarder</button>
+      </div>
+      <div class="help">Sauvegarde les cercles, zones, lignes, régions, codes postaux et repères actifs sous un nom. Charger un emplacement remplace toute la configuration actuelle.</div>
+    </div>
   </div>
 
   <div class="section">
@@ -591,6 +626,7 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     if (isDrawing) stopDrawing(false);
     if (isDrawingLine) stopLineDrawing(false);
+    if (isMarkingSpot) stopMarkingSpot();
   }
 });
 
@@ -797,6 +833,127 @@ function syncLineDistBounds() {
 }
 lineDistUnit.addEventListener('change', syncLineDistBounds);
 syncLineDistBounds();
+
+/* ============================================================
+   SPOTS — repères personnalisés sur la carte
+   ============================================================ */
+const SPOTS_KEY = 'cercles-wallonie-spots-v1';
+let spots = [];      // {id, lat, lng, label, color, marker}
+let isMarkingSpot = false;
+let spotCounter = 0;
+
+function addSpot(lat, lng, label, color, id) {
+  const s = {
+    id: id || (Date.now() + '_' + Math.random().toString(36).slice(2,6)),
+    lat, lng,
+    label: label || ('Repère ' + (++spotCounter)),
+    color: color || '#f59e0b'
+  };
+  s.marker = L.marker([lat, lng], {
+    icon: L.divIcon({
+      className: '',
+      html: `<div style="position:relative;width:24px;height:24px">
+        <div style="width:16px;height:16px;border-radius:50% 50% 50% 0;background:${s.color};border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,.4);transform:rotate(-45deg);position:absolute;top:0;left:4px"></div>
+      </div>`,
+      iconSize: [24, 24], iconAnchor: [12, 22]
+    })
+  }).bindTooltip(s.label).addTo(map);
+  spots.push(s);
+  renderSpotsList();
+  saveSpots();
+}
+function removeSpot(id) {
+  const s = spots.find(s => s.id === id);
+  if (!s) return;
+  map.removeLayer(s.marker);
+  spots = spots.filter(x => x.id !== id);
+  renderSpotsList();
+  saveSpots();
+}
+function renameSpot(id, newLabel) {
+  const s = spots.find(s => s.id === id);
+  if (!s) return;
+  const trimmed = (newLabel || '').trim();
+  if (!trimmed) return;
+  s.label = trimmed;
+  s.marker.setTooltipContent(trimmed);
+  renderSpotsList();
+  saveSpots();
+}
+function renderSpotsList() {
+  const el = document.getElementById('spotsList');
+  if (!spots.length) { el.innerHTML = '<div class="empty">Aucun repère.</div>'; return; }
+  el.innerHTML = spots.map(s => `
+    <div class="circle-item" data-id="${s.id}">
+      <div class="color-dot" style="background:${s.color};border-color:${s.color}"></div>
+      <div class="addr spot-label" title="${esc(s.label)}">${esc(s.label)}</div>
+      <button class="spot-rename" data-id="${s.id}" title="Renommer" style="padding:2px 6px;font-size:12px">✎</button>
+      <button class="rm" data-id="${s.id}" title="Retirer">×</button>
+    </div>`).join('');
+  el.querySelectorAll('button.rm').forEach(b => b.onclick = () => removeSpot(b.dataset.id));
+  el.querySelectorAll('button.spot-rename').forEach(b => b.onclick = () => {
+    const id = b.dataset.id;
+    const item = el.querySelector(`.circle-item[data-id="${id}"]`);
+    const labelDiv = item && item.querySelector('.spot-label');
+    if (!labelDiv) return;
+    const s = spots.find(s => s.id === id);
+    if (!s) return;
+    const inp = document.createElement('input');
+    inp.type = 'text';
+    inp.value = s.label;
+    inp.style.cssText = 'flex:1;min-width:0;padding:2px 4px;font-size:12px;border:1px solid #93c5fd;border-radius:3px;outline:none';
+    labelDiv.replaceWith(inp);
+    b.style.display = 'none';
+    inp.focus();
+    inp.select();
+    const commit = () => { renameSpot(id, inp.value); };
+    inp.addEventListener('blur', commit);
+    inp.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); inp.blur(); }
+      if (e.key === 'Escape') { inp.value = s.label; inp.blur(); }
+    });
+  });
+}
+function saveSpots() {
+  localStorage.setItem(SPOTS_KEY, JSON.stringify(
+    spots.map(s => ({ id: s.id, lat: s.lat, lng: s.lng, label: s.label, color: s.color }))
+  ));
+}
+function loadSpots() {
+  const raw = safeParse(localStorage.getItem(SPOTS_KEY), []);
+  raw.forEach(s => addSpot(s.lat, s.lng, s.label, s.color, s.id));
+  // Sync counter so new auto-labels don't collide with loaded ones
+  for (const s of spots) {
+    const m = /^Repère\s+(\d+)$/.exec(s.label);
+    if (m && +m[1] > spotCounter) spotCounter = +m[1];
+  }
+}
+
+function onSpotClick(e) {
+  stopMarkingSpot();
+  addSpot(e.latlng.lat, e.latlng.lng);
+}
+function startMarkingSpot() {
+  if (isDrawing) stopDrawing(false);
+  if (isDrawingLine) stopLineDrawing(false);
+  isMarkingSpot = true;
+  map.getContainer().style.cursor = 'crosshair';
+  document.getElementById('spotIdleControls').style.display = 'none';
+  document.getElementById('spotActiveControls').style.display = '';
+  document.getElementById('markSpotBtn').classList.add('marking-active');
+  map.on('click', onSpotClick);
+}
+function stopMarkingSpot() {
+  if (!isMarkingSpot) return;
+  isMarkingSpot = false;
+  map.off('click', onSpotClick);
+  map.getContainer().style.cursor = '';
+  document.getElementById('spotIdleControls').style.display = '';
+  document.getElementById('spotActiveControls').style.display = 'none';
+  document.getElementById('markSpotBtn').classList.remove('marking-active');
+}
+document.getElementById('markSpotBtn').onclick = startMarkingSpot;
+document.getElementById('spotCancelBtn').onclick = stopMarkingSpot;
 
 function lineCacheKey(l) {
   const pts = l.latlngs.map(([lat, lng]) => `${lat.toFixed(5)},${lng.toFixed(5)}`).join('|');
@@ -2122,6 +2279,98 @@ document.getElementById('clearCacheBtn').onclick = async () => {
 };
 
 /* ============================================================
+   MEMORY SLOTS — emplacements mémoire
+   ============================================================ */
+const MEMORY_KEY = 'cercles-wallonie-memory-v1';
+let memorySlots = []; // {id, name, date, circles, zones, lines, regions, postcodes}
+
+function saveMemorySlot(name) {
+  const trimmed = (name || '').trim();
+  if (!trimmed) { alert('Veuillez entrer un nom pour l\'emplacement.'); return; }
+  const slot = {
+    id: Date.now() + '_' + Math.random().toString(36).slice(2,6),
+    name: trimmed,
+    date: new Date().toLocaleString('fr-BE', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' }),
+    circles: circles.map(c => ({ id: c.id, lat: c.lat, lng: c.lng, radius: c.radius, address: c.address, color: c.color, editUnit: c.editUnit, mode: c.mode })),
+    zones: zones.map(z => ({ id: z.id, latlngs: z.latlngs, label: z.label, color: z.color, mode: z.mode })),
+    lines: lines.map(l => ({ id: l.id, latlngs: l.latlngs, distance: l.distance, label: l.label, color: l.color, mode: l.mode, editUnit: l.editUnit })),
+    regions: regions.map(r => ({ id: r.id, osmRelationId: r.osmRelationId, name: r.name, adminLevel: r.adminLevel, color: r.color, mode: r.mode })),
+    postcodes: postcodes.map(p => ({ id: p.id, pattern: p.pattern, mode: p.mode })),
+    spots: spots.map(s => ({ id: s.id, lat: s.lat, lng: s.lng, label: s.label, color: s.color }))
+  };
+  memorySlots.unshift(slot);
+  persistMemorySlots();
+  renderMemorySlots();
+}
+
+function loadMemorySlot(id) {
+  const slot = memorySlots.find(s => s.id === id);
+  if (!slot) return;
+  const total = circles.length + zones.length + lines.length + regions.length + postcodes.length + spots.length;
+  if (total > 0 && !confirm(`Charger « ${slot.name} » ? Tous les cercles, zones, lignes, régions, codes postaux et repères actuels seront remplacés.`)) return;
+  // Clear current state
+  [...circles].forEach(c => removeCircle(c.id));
+  [...zones].forEach(z => removeZone(z.id));
+  [...lines].forEach(l => removeLine(l.id));
+  [...regions].forEach(r => removeRegion(r.id));
+  [...postcodes].forEach(p => removePostcodeEntry(p.id));
+  [...spots].forEach(s => removeSpot(s.id));
+  clearResults();
+  // Load slot data
+  (slot.circles || []).forEach(c => addCircle(c.lat, c.lng, c.radius, c.address, c.color, c.id, c.editUnit, c.mode));
+  (slot.zones || []).forEach(z => addZone(z.latlngs, z.label, z.color, z.id, z.mode));
+  (slot.lines || []).forEach(l => addLine(l.latlngs, l.distance, l.label, l.color, l.id, l.mode, l.editUnit));
+  (slot.regions || []).forEach(r => addRegion(r.osmRelationId, r.name, r.adminLevel, r.color, r.id, r.mode));
+  (slot.postcodes || []).forEach(p => addPostcodeEntry(p.pattern, p.mode, p.id));
+  (slot.spots || []).forEach(s => addSpot(s.lat, s.lng, s.label, s.color, s.id));
+}
+
+function deleteMemorySlot(id) {
+  const slot = memorySlots.find(s => s.id === id);
+  if (!slot) return;
+  if (!confirm(`Supprimer l'emplacement « ${slot.name} » ?`)) return;
+  memorySlots = memorySlots.filter(s => s.id !== id);
+  persistMemorySlots();
+  renderMemorySlots();
+}
+
+function persistMemorySlots() {
+  localStorage.setItem(MEMORY_KEY, JSON.stringify(
+    memorySlots.map(s => ({ id: s.id, name: s.name, date: s.date, circles: s.circles, zones: s.zones, lines: s.lines, regions: s.regions, postcodes: s.postcodes, spots: s.spots }))
+  ));
+}
+
+function loadMemorySlotsList() {
+  memorySlots = safeParse(localStorage.getItem(MEMORY_KEY), []);
+  renderMemorySlots();
+}
+
+function renderMemorySlots() {
+  const el = document.getElementById('memorySlotsList');
+  if (!memorySlots.length) { el.innerHTML = '<div class="empty">Aucun emplacement.</div>'; return; }
+  el.innerHTML = memorySlots.map(s => {
+    const total = (s.circles||[]).length + (s.zones||[]).length + (s.lines||[]).length + (s.regions||[]).length + (s.postcodes||[]).length + (s.spots||[]).length;
+    return `<div class="memory-item">
+      <div class="mem-name" title="${esc(s.name)}">${esc(s.name)} <span style="color:#94a3b8;font-size:11px">(${total})</span></div>
+      <span class="mem-date">${esc(s.date)}</span>
+      <button class="mem-load" data-id="${s.id}" title="Charger cet emplacement">↺</button>
+      <button class="rm" data-id="${s.id}" title="Supprimer">×</button>
+    </div>`;
+  }).join('');
+  el.querySelectorAll('button.mem-load').forEach(b => b.onclick = () => loadMemorySlot(b.dataset.id));
+  el.querySelectorAll('button.rm').forEach(b => b.onclick = () => deleteMemorySlot(b.dataset.id));
+}
+
+document.getElementById('memorySaveBtn').onclick = () => {
+  const inp = document.getElementById('memoryNameInput');
+  saveMemorySlot(inp.value);
+  inp.value = '';
+};
+document.getElementById('memoryNameInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); document.getElementById('memorySaveBtn').click(); }
+});
+
+/* ============================================================
    STARTUP
    ============================================================ */
 loadCircles();
@@ -2129,6 +2378,8 @@ loadZones();
 loadLines();
 loadRegions();
 loadPostcodes();
+loadSpots();
+loadMemorySlotsList();
 updateSearchBtn();
 refreshCacheInfo();
 </script>
