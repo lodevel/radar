@@ -496,8 +496,8 @@ function updateCircleRadius(id, val, unit) {
 }
 function updateSearchBtn() {
   const hasGeoAreas = circles.length || zones.length || lines.length || regions.length;
-  const hasAddPostcodes = postcodes.some(p => p.mode !== 'sub');
-  document.getElementById('searchBtn').disabled = !hasGeoAreas && !hasAddPostcodes;
+  const hasPostcodes = postcodes.length > 0;
+  document.getElementById('searchBtn').disabled = !hasGeoAreas && !hasPostcodes;
 }
 
 /* ============================================================
@@ -1736,9 +1736,14 @@ document.getElementById('clearAllBtn').onclick = () => {
 
 async function runSearch() {
   const addPostcodes = postcodes.filter(p => p.mode !== 'sub');
-  if (!circles.length && !zones.length && !lines.length && !regions.length && !addPostcodes.length) return;
+  const noGeoAreas = !circles.length && !zones.length && !lines.length && !regions.length;
+  if (noGeoAreas && !postcodes.length) return;
   const btn = document.getElementById('searchBtn');
   const status = document.getElementById('searchStatus');
+  if (noGeoAreas && !addPostcodes.length) {
+    status.innerHTML = `<span class="error">Codes postaux soustractifs uniquement&nbsp;: ajoutez une zone géographique ou au moins un code postal positif (+) pour lancer la recherche.</span>`;
+    return;
+  }
   btn.disabled = true; btn.textContent = 'Chargement…';
   clearResults();
 
