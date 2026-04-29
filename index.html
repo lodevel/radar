@@ -495,7 +495,9 @@ function updateCircleRadius(id, val, unit) {
   saveCircles();
 }
 function updateSearchBtn() {
-  document.getElementById('searchBtn').disabled = !circles.length && !zones.length && !lines.length && !regions.length;
+  const hasGeoAreas = circles.length || zones.length || lines.length || regions.length;
+  const hasAddPostcodes = postcodes.some(p => p.mode !== 'sub');
+  document.getElementById('searchBtn').disabled = !hasGeoAreas && !hasAddPostcodes;
 }
 
 /* ============================================================
@@ -1162,6 +1164,59 @@ function buildRegionQuery(reg) {
 
 function regionCacheKeyForElements(reg) { return 'reg-elts:' + reg.osmRelationId; }
 
+/* ============================================================
+   POSTCODE → OVERPASS HELPERS
+   ============================================================ */
+function postcodePatternToRegex(raw) {
+  const p = String(raw).trim();
+  const rangeM = p.match(/^(\d+)\s*-\s*(\d+)$/);
+  if (rangeM) {
+    const lo = +rangeM[1], hi = +rangeM[2];
+    if (hi - lo <= 500) {
+      const codes = [];
+      for (let i = lo; i <= hi; i++) codes.push(String(i));
+      return codes.join('|');
+    }
+    return '\\d+'; // too many values — over-fetch, client-side filter applies
+  }
+  let re = '';
+  let i = 0;
+  while (i < p.length) {
+    const ch = p[i];
+    if (ch === '*') { re += '\\d*'; i++; }
+    else if (ch === '?') { re += '\\d'; i++; }
+    else if (ch === '[') {
+      const close = p.indexOf(']', i);
+      const inside = p.slice(i + 1, close);
+      re += '[' + inside + ']';
+      i = close + 1;
+    }
+    else if (/\d/.test(ch)) { re += ch; i++; }
+    else if (ch === ' ') { i++; }
+    else i++;
+  }
+  return re;
+}
+
+function buildPostcodeQuery(addEntries) {
+  const highwayRe = 'residential|primary|secondary|tertiary|unclassified|living_street|service|footway|path|track|pedestrian|road|cycleway|steps|trunk|primary_link|secondary_link|tertiary_link|trunk_link';
+  const tourismRe = 'attraction|artwork|viewpoint|museum';
+  const regexParts = addEntries.map(e => postcodePatternToRegex(e.pattern)).filter(Boolean);
+  const pcRegex = `^(${regexParts.join('|')})$`;
+  const pc = `["addr:postcode"~"${pcRegex}"]`;
+  const parts = [
+    `way(area.be)[highway~"^(${highwayRe})$"][name]${pc};`,
+    `way(area.be)[place=square]${pc};`,
+    `way(area.be)[leisure=plaza]${pc};`,
+    `node(area.be)[place=square]${pc};`,
+    `node(area.be)[historic]${pc};`,
+    `way(area.be)[historic]${pc};`,
+    `node(area.be)[tourism~"^(${tourismRe})$"]${pc};`,
+    `way(area.be)[tourism~"^(${tourismRe})$"]${pc};`
+  ];
+  return `[out:json][timeout:180];\narea["ISO3166-1"="BE"]->.be;\n(\n  ${parts.join('\n  ')}\n);\nout tags geom;`;
+}
+
 /* --- Region search via Nominatim --- */
 const regionInput = document.getElementById('regionInput');
 const regionResults = document.getElementById('regionResults');
@@ -1283,12 +1338,14 @@ function addPostcodeEntry(pattern, mode, id) {
   });
   renderPostcodesList();
   savePostcodes();
+  updateSearchBtn();
 }
 
 function removePostcodeEntry(id) {
   postcodes = postcodes.filter(p => p.id !== id);
   renderPostcodesList();
   savePostcodes();
+  updateSearchBtn();
 }
 
 function renderPostcodesList() {
@@ -1311,6 +1368,7 @@ function renderPostcodesList() {
       p.mode = p.mode === 'sub' ? 'add' : 'sub';
       savePostcodes();
       renderPostcodesList();
+      updateSearchBtn();
     };
   });
   el.querySelectorAll('button.rm').forEach(b => b.onclick = () => removePostcodeEntry(b.dataset.id));
@@ -1398,6 +1456,8 @@ function bboxOfAreas() {
     if (r.bbox.s < s) s = r.bbox.s; if (r.bbox.n > n) n = r.bbox.n;
     if (r.bbox.w < w) w = r.bbox.w; if (r.bbox.e > e) e = r.bbox.e;
   }
+  // Fallback to Belgium's approximate bounding box when no geometric areas are defined
+  if (s > n) return { s: 49.4, w: 2.5, n: 51.6, e: 6.5 };
   return { s, w, n, e };
 }
 function adminCacheKey(bbox) {
@@ -1662,7 +1722,8 @@ document.getElementById('clearAllBtn').onclick = () => {
 };
 
 async function runSearch() {
-  if (!circles.length && !zones.length && !lines.length && !regions.length) return;
+  const addPostcodes = postcodes.filter(p => p.mode !== 'sub');
+  if (!circles.length && !zones.length && !lines.length && !regions.length && !addPostcodes.length) return;
   const btn = document.getElementById('searchBtn');
   const status = document.getElementById('searchStatus');
   btn.disabled = true; btn.textContent = 'Chargement…';
@@ -1787,6 +1848,28 @@ async function runSearch() {
         e.areaIds.add(reg.id);
       }
     }
+    // Postcodes-only mode: search Belgium-wide by addr:postcode when no geometric areas are defined
+    if (!circles.length && !zones.length && !lines.length && !regions.length && addPostcodes.length) {
+      const key = 'pc-search:' + addPostcodes.map(e => e.pattern).slice().sort().join(',');
+      let entry = await idbGet(STORE_CIRCLES, key);
+      if (entry) {
+        cachedCount++;
+        status.textContent = `Codes postaux — cache (${entry.elements.length} éléments)`;
+      } else {
+        status.textContent = `Codes postaux — requête Overpass…`;
+        const q = buildPostcodeQuery(addPostcodes);
+        const data = await overpassFetch(q);
+        entry = { elements: data.elements || [], ts: Date.now() };
+        await idbPut(STORE_CIRCLES, key, entry);
+        fetchedCount++;
+      }
+      for (const el of entry.elements) {
+        const k = el.type + '/' + el.id;
+        let e = elementAreas.get(k);
+        if (!e) { e = { el, areaIds: new Set() }; elementAreas.set(k, e); }
+        e.areaIds.add('_pc_search_');
+      }
+    }
   } catch(e) {
     status.innerHTML = `<span class="error">Erreur Overpass : ${esc(e.message || e)}</span>`;
     btn.disabled = false; btn.textContent = 'Rechercher';
@@ -1803,6 +1886,9 @@ async function runSearch() {
     ...lines.filter(l => l.mode !== 'sub').map(l => l.id),
     ...regions.filter(r => r.mode !== 'sub' && !r.loadError).map(r => r.id)
   ]);
+  if (!circles.length && !zones.length && !lines.length && !regions.length && addPostcodes.length) {
+    addIds.add('_pc_search_');
+  }
   const subIds = new Set([
     ...circles.filter(c => c.mode === 'sub').map(c => c.id),
     ...zones.filter(z => z.mode === 'sub').map(z => z.id),
