@@ -1928,7 +1928,15 @@ async function runSearch() {
   // Postcode filter (additive/subtractive on addr:postcode tag)
   let postcodeFiltered = filtered;
   if (postcodes.length) {
-    postcodeFiltered = filtered.filter(el => postcodeAllowed(el.tags && el.tags['addr:postcode']));
+    // In postcodes-only mode streets are pre-filtered by the Overpass postal_code area query
+    // (area.pca). Streets never carry addr:postcode directly, so skip the client-side filter
+    // for elements that have no addr:postcode tag when no geometric areas are active.
+    const isPostcodesOnly = !circles.length && !zones.length && !lines.length && !regions.length;
+    postcodeFiltered = filtered.filter(el => {
+      const pc = el.tags && el.tags['addr:postcode'];
+      if (isPostcodesOnly && !pc) return true;
+      return postcodeAllowed(pc);
+    });
     console.log(`Après filtre codes postaux : ${postcodeFiltered.length} éléments (sur ${filtered.length})`);
   }
 
