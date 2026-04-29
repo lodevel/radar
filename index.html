@@ -1167,12 +1167,21 @@ function regionCacheKeyForElements(reg) { return 'reg-elts:' + reg.osmRelationId
 /* ============================================================
    POSTCODE → OVERPASS HELPERS
    ============================================================ */
+// Maximum number of individual codes to enumerate in a range before falling back to \d+.
+// Overpass regex alternations are efficient up to a few hundred values; beyond that
+// we over-fetch and rely on the client-side postcodeAllowed() filter.
+const PC_RANGE_ENUMERATE_MAX = 500;
+// Virtual area ID used when running a postcodes-only search (no circles/zones/lines/regions).
+const PC_VIRTUAL_AREA_ID = '_pc_search_';
+// Approximate bounding box for Belgium, used as fallback when no geometric areas are defined.
+const BELGIUM_BBOX = { s: 49.4, w: 2.5, n: 51.6, e: 6.5 };
+
 function postcodePatternToRegex(raw) {
   const p = String(raw).trim();
   const rangeM = p.match(/^(\d+)\s*-\s*(\d+)$/);
   if (rangeM) {
     const lo = +rangeM[1], hi = +rangeM[2];
-    if (hi - lo <= 500) {
+    if (hi - lo <= PC_RANGE_ENUMERATE_MAX) {
       const codes = [];
       for (let i = lo; i <= hi; i++) codes.push(String(i));
       return codes.join('|');
@@ -1187,6 +1196,7 @@ function postcodePatternToRegex(raw) {
     else if (ch === '?') { re += '\\d'; i++; }
     else if (ch === '[') {
       const close = p.indexOf(']', i);
+      if (close < 0) { i++; continue; } // malformed — skip, compilePostcodePattern already validated
       const inside = p.slice(i + 1, close);
       re += '[' + inside + ']';
       i = close + 1;
@@ -1457,7 +1467,7 @@ function bboxOfAreas() {
     if (r.bbox.w < w) w = r.bbox.w; if (r.bbox.e > e) e = r.bbox.e;
   }
   // Fallback to Belgium's approximate bounding box when no geometric areas are defined
-  if (s > n) return { s: 49.4, w: 2.5, n: 51.6, e: 6.5 };
+  if (s > n) return BELGIUM_BBOX;
   return { s, w, n, e };
 }
 function adminCacheKey(bbox) {
@@ -1867,7 +1877,7 @@ async function runSearch() {
         const k = el.type + '/' + el.id;
         let e = elementAreas.get(k);
         if (!e) { e = { el, areaIds: new Set() }; elementAreas.set(k, e); }
-        e.areaIds.add('_pc_search_');
+        e.areaIds.add(PC_VIRTUAL_AREA_ID);
       }
     }
   } catch(e) {
@@ -1887,7 +1897,7 @@ async function runSearch() {
     ...regions.filter(r => r.mode !== 'sub' && !r.loadError).map(r => r.id)
   ]);
   if (!circles.length && !zones.length && !lines.length && !regions.length && addPostcodes.length) {
-    addIds.add('_pc_search_');
+    addIds.add(PC_VIRTUAL_AREA_ID);
   }
   const subIds = new Set([
     ...circles.filter(c => c.mode === 'sub').map(c => c.id),
