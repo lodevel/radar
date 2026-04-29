@@ -1214,17 +1214,20 @@ function buildPostcodeQuery(addEntries) {
   const regexParts = addEntries.map(e => postcodePatternToRegex(e.pattern)).filter(Boolean);
   const pcRegex = `^(${regexParts.join('|')})$`;
   const pc = `["addr:postcode"~"${pcRegex}"]`;
+  // Streets and place/plaza elements: road ways in OSM almost never carry addr:postcode directly.
+  // Instead use boundary=postal_code area relations (.pca) so any street inside a postcode zone is returned.
+  // Historic/tourism/landmark nodes typically do carry addr:postcode, so keep the tag filter for those.
   const parts = [
-    `way(area.be)[highway~"^(${highwayRe})$"][name]${pc};`,
-    `way(area.be)[place=square]${pc};`,
-    `way(area.be)[leisure=plaza]${pc};`,
-    `node(area.be)[place=square]${pc};`,
+    `way(area.pca)(area.be)[highway~"^(${highwayRe})$"][name];`,
+    `way(area.pca)(area.be)[place=square];`,
+    `way(area.pca)(area.be)[leisure=plaza];`,
+    `node(area.pca)(area.be)[place=square];`,
     `node(area.be)[historic]${pc};`,
     `way(area.be)[historic]${pc};`,
     `node(area.be)[tourism~"^(${tourismRe})$"]${pc};`,
     `way(area.be)[tourism~"^(${tourismRe})$"]${pc};`
   ];
-  return `[out:json][timeout:180];\narea["ISO3166-1"="BE"]->.be;\n(\n  ${parts.join('\n  ')}\n);\nout tags geom;`;
+  return `[out:json][timeout:180];\narea["ISO3166-1"="BE"]->.be;\narea["boundary"="postal_code"]["postal_code"~"${pcRegex}"]->.pca;\n(\n  ${parts.join('\n  ')}\n);\nout tags geom;`;
 }
 
 /* --- Region search via Nominatim --- */
